@@ -294,6 +294,54 @@ func (h *MemorySystemHandler) SearchSkillMemories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"memories": memories})
 }
 
+// ListEntities 列出实体
+func (h *MemorySystemHandler) ListEntities(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 { limit = 50 }
+
+	entities, err := h.memorySvc.ListEntities(tenantID, limit)
+	if err != nil {
+		log.Printf("Failed to list entities: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list entities"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"entities": entities})
+}
+
+// ListSkillMemories 列出技能记忆
+func (h *MemorySystemHandler) ListSkillMemories(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 { limit = 50 }
+
+	memories, err := h.memorySvc.ListSkillMemories(tenantID, limit)
+	if err != nil {
+		log.Printf("Failed to list skill memories: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list skill memories"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"memories": memories})
+}
+
+// ListAllUserMemories 列出所有用户记忆
+func (h *MemorySystemHandler) ListAllUserMemories(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 { limit = 50 }
+
+	memories, err := h.memorySvc.ListAllUserMemories(tenantID, limit)
+	if err != nil {
+		log.Printf("Failed to list user memories: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list user memories"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"memories": memories})
+}
+
 // GetMemoryStats 获取记忆统计
 func (h *MemorySystemHandler) GetMemoryStats(c *gin.Context) {
 	tenantID := c.Param("tenantId")

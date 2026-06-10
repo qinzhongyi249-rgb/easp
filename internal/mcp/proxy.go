@@ -35,10 +35,11 @@ func DefaultProxyConfig() ProxyConfig {
 
 // MCPProxy MCP代理
 type MCPProxy struct {
-	client  *http.Client
-	config  ProxyConfig
-	breaker *resilience.CircuitBreakerManager
-	limiter *resilience.RateLimiterManager
+	client    *http.Client
+	mcpClient *MCPClient
+	config    ProxyConfig
+	breaker   *resilience.CircuitBreakerManager
+	limiter   *resilience.RateLimiterManager
 }
 
 // NewMCPProxy 创建MCP代理
@@ -47,9 +48,10 @@ func NewMCPProxy(config ProxyConfig) *MCPProxy {
 		client: &http.Client{
 			Timeout: config.Timeout,
 		},
-		config:  config,
-		breaker: resilience.NewCircuitBreakerManager(resilience.DefaultCircuitBreakerConfig()),
-		limiter: resilience.NewRateLimiterManager(),
+		mcpClient: NewMCPClient(),
+		config:    config,
+		breaker:   resilience.NewCircuitBreakerManager(resilience.DefaultCircuitBreakerConfig()),
+		limiter:   resilience.NewRateLimiterManager(),
 	}
 }
 
@@ -111,7 +113,12 @@ func (p *MCPProxy) CallTool(ctx context.Context, req ToolCallRequest) (*ToolCall
 
 // executeTool 执行工具调用
 func (p *MCPProxy) executeTool(ctx context.Context, req ToolCallRequest) (*ToolCallResponse, error) {
-	// 解析后端路径和方法
+	// 如果连接器配置了MCP Server URL，走MCP协议调用
+	if req.Connector.MCPServerURL != nil && *req.Connector.MCPServerURL != "" {
+		return p.executeMCPTool(ctx, req)
+	}
+
+	// 否则走REST API调用
 	method := "GET"
 	if req.Tool.BackendMethod != nil {
 		method = *req.Tool.BackendMethod
@@ -196,6 +203,112 @@ func (p *MCPProxy) executeTool(ctx context.Context, req ToolCallRequest) (*ToolC
 		Success: true,
 		Data:    data,
 	}, nil
+}
+
+// executeMCPTool 通过MCP协议（JSON-RPC）调用工具
+func (p *MCPProxy) executeMCPTool(ctx context.Context, req ToolCallRequest) (*ToolCallResponse, error) {
+	serverURL := *req.Connector.MCPServerURL
+	transportType := "sse"
+	if req.Connector.TransportType != nil && *req.Connector.TransportType != "" {
+		transportType = *req.Connector.TransportType
+	}
+
+	// 解析参数
+	var args map[string]interface{}
+	if req.Arguments != nil {
+		if err := json.Unmarshal(req.Arguments, &args); err != nil {
+			args = nil
+		}
+	}
+
+	log.Printf("MCP Proxy: calling tool %s via %s on %s", req.Tool.Name, transportType, serverURL)
+
+	if transportType == "streamable_http" {
+		return p.callToolStreamableHTTP(ctx, serverURL, req.Tool.Name, args, req.Connector)
+	}
+
+	// 默认走SSE
+	return p.callToolSSE(ctx, serverURL, req.Tool.Name, args, req.Connector)
+}
+
+// callToolSSE 通过SSE传输调用MCP工具
+func (p *MCPProxy) callToolSSE(ctx context.Context, serverURL, toolName string, args map[string]interface{}, connector models.Connector) (*ToolCallResponse, error) {
+	start := time.Now()
+	respCh := make(chan *JSONRPCResponse, 10)
+	endpointCh := make(chan string, 1)
+
+	// 启动SSE连接
+	go p.mcpClient.connectSSEAndRead(ctx, serverURL, connector.AuthType, connector.AuthConfig, connector.Headers, endpointCh, respCh)
+
+	// 等待获取endpoint
+	var endpointURL string
+	select {
+	case ep := <-endpointCh:
+		endpointURL = ep
+	case <-time.After(15 * time.Second):
+		return &ToolCallResponse{Success: false, Error: "SSE connect timeout", Latency: time.Since(start).Milliseconds()}, nil
+	case <-ctx.Done():
+		return &ToolCallResponse{Success: false, Error: "context cancelled", Latency: time.Since(start).Milliseconds()}, nil
+	}
+
+	// 发送initialize
+	initResp, err := p.mcpClient.sendAndWaitSSE(ctx, endpointURL, "initialize", map[string]interface{}{
+		"protocolVersion": JSONRPCVersion,
+		"capabilities":    map[string]interface{}{},
+		"clientInfo":      map[string]interface{}{"name": "easp-proxy", "version": "1.0.0"},
+	}, connector.AuthType, connector.AuthConfig, connector.Headers, respCh)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("initialize failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
+	}
+	if initResp.Error != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("initialize error: %v", initResp.Error), Latency: time.Since(start).Milliseconds()}, nil
+	}
+
+	// 发送 initialized 通知
+	p.mcpClient.sendNotify(ctx, endpointURL, "notifications/initialized", nil, connector.AuthType, connector.AuthConfig, connector.Headers)
+
+	// 调用工具
+	callResp, err := p.mcpClient.sendAndWaitSSE(ctx, endpointURL, "tools/call", map[string]interface{}{
+		"name":      toolName,
+		"arguments": args,
+	}, connector.AuthType, connector.AuthConfig, connector.Headers, respCh)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
+	}
+	if callResp.Error != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call error: %v", callResp.Error), Latency: time.Since(start).Milliseconds()}, nil
+	}
+
+	return &ToolCallResponse{Success: true, Data: callResp.Result, Latency: time.Since(start).Milliseconds()}, nil
+}
+
+// callToolStreamableHTTP 通过StreamableHTTP传输调用MCP工具
+func (p *MCPProxy) callToolStreamableHTTP(ctx context.Context, serverURL, toolName string, args map[string]interface{}, connector models.Connector) (*ToolCallResponse, error) {
+	start := time.Now()
+
+	// initialize
+	_, err := p.mcpClient.httpDoRPC(ctx, serverURL, "initialize", map[string]interface{}{
+		"protocolVersion": JSONRPCVersion,
+		"capabilities":    map[string]interface{}{},
+		"clientInfo":      map[string]interface{}{"name": "easp-proxy", "version": "1.0.0"},
+	}, connector.AuthType, connector.AuthConfig, connector.Headers)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("initialize failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
+	}
+
+	// 调用工具
+	callResp, err := p.mcpClient.httpDoRPC(ctx, serverURL, "tools/call", map[string]interface{}{
+		"name":      toolName,
+		"arguments": args,
+	}, connector.AuthType, connector.AuthConfig, connector.Headers)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
+	}
+	if callResp.Error != nil {
+		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call error: %v", callResp.Error), Latency: time.Since(start).Milliseconds()}, nil
+	}
+
+	return &ToolCallResponse{Success: true, Data: callResp.Result, Latency: time.Since(start).Milliseconds()}, nil
 }
 
 // replacePathParams 替换路径参数

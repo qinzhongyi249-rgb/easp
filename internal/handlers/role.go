@@ -27,20 +27,24 @@ func NewRoleHandler() *RoleHandler {
 
 // CreateRoleRequest 创建角色请求
 type CreateRoleRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description"`
-	Tools       string `json:"tools"`
-	RateLimit   string `json:"rate_limit"`
-	DataScope   string `json:"data_scope"`
+	Name            string `json:"name" binding:"required"`
+	Description     string `json:"description"`
+	Tools           string `json:"tools"`
+	AllowedMCPTools string `json:"allowed_mcp_tools"`
+	AllowedSkills   string `json:"allowed_skills"`
+	RateLimit       string `json:"rate_limit"`
+	DataScope       string `json:"data_scope"`
 }
 
 // UpdateRoleRequest 更新角色请求
 type UpdateRoleRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Tools       string `json:"tools"`
-	RateLimit   string `json:"rate_limit"`
-	DataScope   string `json:"data_scope"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Tools           string `json:"tools"`
+	AllowedMCPTools string `json:"allowed_mcp_tools"`
+	AllowedSkills   string `json:"allowed_skills"`
+	RateLimit       string `json:"rate_limit"`
+	DataScope       string `json:"data_scope"`
 }
 
 // AssignRoleRequest 分配角色请求
@@ -68,15 +72,17 @@ func (h *RoleHandler) CreateRole(c *gin.Context) {
 	}
 
 	role := &models.Role{
-		ID:          uuid.New().String(),
-		TenantID:    tenantID,
-		Name:        req.Name,
-		Description: toPtr(req.Description),
-		Tools:       toPtr(req.Tools),
-		RateLimit:   toPtr(req.RateLimit),
-		DataScope:   toPtr(req.DataScope),
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:              uuid.New().String(),
+		TenantID:        tenantID,
+		Name:            req.Name,
+		Description:     toPtr(req.Description),
+		Tools:           toPtr(req.Tools),
+		AllowedMCPTools: toPtr(req.AllowedMCPTools),
+		AllowedSkills:   toPtr(req.AllowedSkills),
+		RateLimit:       toPtr(req.RateLimit),
+		DataScope:       toPtr(req.DataScope),
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
 	}
 
 	if err := h.roleRepo.Create(role); err != nil {
@@ -159,6 +165,9 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 	if req.Tools != "" {
 		role.Tools = toPtr(req.Tools)
 	}
+	// allowed_mcp_tools 和 allowed_skills 支持清空（传 "[]" 表示清空）
+	role.AllowedMCPTools = toPtr(req.AllowedMCPTools)
+	role.AllowedSkills = toPtr(req.AllowedSkills)
 	if req.RateLimit != "" {
 		role.RateLimit = toPtr(req.RateLimit)
 	}

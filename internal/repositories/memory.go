@@ -18,9 +18,22 @@ func NewMemoryPoolRepository() *MemoryPoolRepository {
 func (r *MemoryPoolRepository) Create(pool *models.MemoryPool) error {
 	pool.ID = uuid.New().String()
 	pool.CreatedAt = time.Now()
-	
-	query := `INSERT INTO memory_pools (id, tenant_id, level, owner_id, name, created_at) 
-			  VALUES (:id, :tenant_id, :level, :owner_id, :name, :created_at)`
+	pool.UpdatedAt = time.Now()
+
+	// 设置默认值
+	if pool.Type == "" {
+		pool.Type = "personal"
+	}
+	if pool.Purpose == "" {
+		pool.Purpose = "conversation"
+	}
+	if pool.Priority == 0 {
+		pool.Priority = 5
+	}
+
+	query := `INSERT INTO memory_pools 
+		(id, tenant_id, name, description, type, purpose, priority, max_tokens, auto_activate, trigger_rules, owner_id, enabled, memory_count, created_at, updated_at) 
+		VALUES (:id, :tenant_id, :name, :description, :type, :purpose, :priority, :max_tokens, :auto_activate, :trigger_rules, :owner_id, :enabled, :memory_count, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, pool)
 	return err
 }
@@ -36,18 +49,49 @@ func (r *MemoryPoolRepository) GetByID(id string) (*models.MemoryPool, error) {
 
 func (r *MemoryPoolRepository) ListByTenant(tenantID string) ([]models.MemoryPool, error) {
 	var pools []models.MemoryPool
-	err := database.DB.Select(&pools, "SELECT * FROM memory_pools WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
+	err := database.DB.Select(&pools, "SELECT * FROM memory_pools WHERE tenant_id = ? ORDER BY priority DESC, created_at DESC", tenantID)
+	if pools == nil {
+		pools = []models.MemoryPool{}
+	}
+	return pools, err
+}
+
+func (r *MemoryPoolRepository) ListActiveByTenant(tenantID string) ([]models.MemoryPool, error) {
+	var pools []models.MemoryPool
+	err := database.DB.Select(&pools, "SELECT * FROM memory_pools WHERE tenant_id = ? AND enabled = true ORDER BY priority DESC", tenantID)
+	if pools == nil {
+		pools = []models.MemoryPool{}
+	}
 	return pools, err
 }
 
 func (r *MemoryPoolRepository) Update(pool *models.MemoryPool) error {
-	query := `UPDATE memory_pools SET name=:name, level=:level WHERE id=:id`
+	pool.UpdatedAt = time.Now()
+	query := `UPDATE memory_pools SET 
+		name=:name, description=:description, type=:type, purpose=:purpose, 
+		priority=:priority, max_tokens=:max_tokens, auto_activate=:auto_activate, 
+		trigger_rules=:trigger_rules, enabled=:enabled, updated_at=:updated_at 
+		WHERE id=:id`
 	_, err := database.DB.NamedExec(query, pool)
 	return err
 }
 
 func (r *MemoryPoolRepository) Delete(id string) error {
 	_, err := database.DB.Exec("DELETE FROM memory_pools WHERE id = ?", id)
+	return err
+}
+
+// UpdateMemoryCount 更新记忆池的记忆数量
+func (r *MemoryPoolRepository) UpdateMemoryCount(poolID string) error {
+	_, err := database.DB.Exec(`
+		UPDATE memory_pools SET memory_count = (
+			SELECT COUNT(*) FROM user_memories WHERE pool_id = ?
+		) + (
+			SELECT COUNT(*) FROM entities WHERE pool_id = ?
+		) + (
+			SELECT COUNT(*) FROM skill_memories WHERE pool_id = ?
+		) WHERE id = ?
+	`, poolID, poolID, poolID, poolID)
 	return err
 }
 
@@ -62,7 +106,7 @@ func (r *MemoryEntryRepository) Create(entry *models.MemoryEntry) error {
 	entry.ID = uuid.New().String()
 	entry.CreatedAt = time.Now()
 	entry.UpdatedAt = time.Now()
-	
+
 	query := `INSERT INTO memory_entries (id, pool_id, type, content, metadata, sensitivity, created_at, updated_at) 
 			  VALUES (:id, :pool_id, :type, :content, :metadata, :sensitivity, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, entry)

@@ -157,8 +157,8 @@ func (r *RoleRepository) Create(role *models.Role) error {
 	role.CreatedAt = time.Now()
 	role.UpdatedAt = time.Now()
 
-	query := `INSERT INTO roles (id, tenant_id, name, description, tools, rate_limit, data_scope, is_system, is_default, created_at, updated_at) 
-			  VALUES (:id, :tenant_id, :name, :description, :tools, :rate_limit, :data_scope, :is_system, :is_default, :created_at, :updated_at)`
+	query := `INSERT INTO roles (id, tenant_id, name, description, tools, allowed_mcp_tools, allowed_skills, rate_limit, data_scope, is_system, is_default, created_at, updated_at) 
+			  VALUES (:id, :tenant_id, :name, :description, :tools, :allowed_mcp_tools, :allowed_skills, :rate_limit, :data_scope, :is_system, :is_default, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, role)
 	return err
 }
@@ -201,7 +201,7 @@ func (r *RoleRepository) ListAll() ([]models.Role, error) {
 
 func (r *RoleRepository) Update(role *models.Role) error {
 	role.UpdatedAt = time.Now()
-	query := `UPDATE roles SET name=:name, description=:description, tools=:tools, rate_limit=:rate_limit, data_scope=:data_scope, is_system=:is_system, is_default=:is_default, updated_at=:updated_at WHERE id=:id`
+	query := `UPDATE roles SET name=:name, description=:description, tools=:tools, allowed_mcp_tools=:allowed_mcp_tools, allowed_skills=:allowed_skills, rate_limit=:rate_limit, data_scope=:data_scope, is_system=:is_system, is_default=:is_default, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, role)
 	return err
 }

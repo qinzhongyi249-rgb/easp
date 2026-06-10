@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
+	"github.com/easp-platform/easp/internal/mcp"
 	"github.com/easp-platform/easp/internal/memory"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/skill"
@@ -140,14 +142,12 @@ func (h *VectorMemoryHandler) DeleteMemory(c *gin.Context) {
 
 // SkillEngineHandler Skill引擎处理器
 type SkillEngineHandler struct {
-	engine *skill.SkillEngine
+	// 不再持有共享engine，每次请求创建独立的engine
 }
 
 // NewSkillEngineHandler 创建Skill引擎处理器
 func NewSkillEngineHandler() *SkillEngineHandler {
-	return &SkillEngineHandler{
-		engine: skill.NewSkillEngine(),
-	}
+	return &SkillEngineHandler{}
 }
 
 // ExecuteSkill 执行Skill
@@ -172,30 +172,38 @@ func (h *SkillEngineHandler) ExecuteSkill(c *gin.Context) {
 		return
 	}
 
-	// 注册MCP工具执行器（注入tenantID）
-	h.engine.RegisterExecutor("mcp_tool", func(ctx context.Context, step skill.Step, inputs map[string]interface{}) (map[string]interface{}, error) {
-		toolName := step.Action
-		if toolName == "" {
-			toolName = step.Name
+	// 创建MCP caller函数
+	mcpCaller := func(ctx context.Context, toolName string, arguments json.RawMessage) (map[string]interface{}, error) {
+		var mcpTool models.MCPTool
+		if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", toolName, tenantID); err != nil {
+			return nil, fmt.Errorf("MCP tool not found: %s", toolName)
 		}
-		params := step.Params
-		if params == nil {
-			params = make(map[string]interface{})
+		var connector models.Connector
+		if err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ?", mcpTool.ConnectorID); err != nil {
+			return nil, fmt.Errorf("connector not found")
 		}
-		result := ExecuteToolByName(tenantID, toolName, params)
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(result), &parsed); err == nil {
-			if m, ok := parsed.(map[string]interface{}); ok {
-				return m, nil
-			}
-			return map[string]interface{}{"data": parsed}, nil
+		mcpHandler := NewMCPHandler()
+		resp, callErr := mcpHandler.proxy.CallTool(ctx, mcp.ToolCallRequest{
+			Tool:      mcpTool,
+			Connector: connector,
+			Arguments: arguments,
+		})
+		if callErr != nil {
+			return nil, callErr
 		}
-		return map[string]interface{}{"result": result}, nil
-	})
+		if !resp.Success {
+			return nil, fmt.Errorf("MCP tool error: %s", resp.Error)
+		}
+		resultMap, ok := resp.Data.(map[string]interface{})
+		if !ok {
+			resultMap = map[string]interface{}{"result": resp.Data}
+		}
+		return resultMap, nil
+	}
 
-	// 执行Skill（通过context传递tenantID）
-	ctx := context.WithValue(c.Request.Context(), "tenant_id", tenantID)
-	execution, err := h.engine.Execute(ctx, skillDef, req.Inputs)
+	// 创建带MCP调用能力的引擎
+	engine := skill.NewSkillEngineWithCaller(tenantID, mcpCaller)
+	execution, err := engine.Execute(c.Request.Context(), skillDef, req.Inputs)
 	if err != nil {
 		log.Printf("Failed to execute skill: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to execute skill"})

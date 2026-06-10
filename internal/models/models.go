@@ -61,17 +61,19 @@ type User struct {
 
 // Role 角色模型
 type Role struct {
-	ID          string  `db:"id" json:"id"`
-	TenantID    string  `db:"tenant_id" json:"tenant_id"`
-	Name        string  `db:"name" json:"name"`
-	Description *string `db:"description" json:"description,omitempty"`
-	Tools       *string `db:"tools" json:"tools,omitempty"`
-	RateLimit   *string `db:"rate_limit" json:"rate_limit,omitempty"`
-	DataScope   *string `db:"data_scope" json:"data_scope,omitempty"`
-	IsSystem    bool    `db:"is_system" json:"is_system"`
-	IsDefault   bool    `db:"is_default" json:"is_default"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	ID               string  `db:"id" json:"id"`
+	TenantID         string  `db:"tenant_id" json:"tenant_id"`
+	Name             string  `db:"name" json:"name"`
+	Description      *string `db:"description" json:"description,omitempty"`
+	Tools            *string `db:"tools" json:"tools,omitempty"`                         // UI菜单权限 JSON数组
+	AllowedMCPTools  *string `db:"allowed_mcp_tools" json:"allowed_mcp_tools,omitempty"` // 允许使用的MCP工具ID JSON数组
+	AllowedSkills    *string `db:"allowed_skills" json:"allowed_skills,omitempty"`       // 允许使用的技能ID JSON数组
+	RateLimit        *string `db:"rate_limit" json:"rate_limit,omitempty"`
+	DataScope        *string `db:"data_scope" json:"data_scope,omitempty"`
+	IsSystem         bool    `db:"is_system" json:"is_system"`
+	IsDefault        bool    `db:"is_default" json:"is_default"`
+	CreatedAt        time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // UserRole 用户角色关联
@@ -82,20 +84,23 @@ type UserRole struct {
 
 // Connector 连接器模型
 type Connector struct {
-	ID          string     `db:"id" json:"id"`
-	TenantID    string     `db:"tenant_id" json:"tenant_id"`
-	Name        string     `db:"name" json:"name"`
-	Type        string     `db:"type" json:"type"`
-	BaseURL     string     `db:"base_url" json:"base_url"`
-	AuthType    *string    `db:"auth_type" json:"auth_type,omitempty"`
-	AuthConfig  *string    `db:"auth_config" json:"auth_config,omitempty"`
-	SpecURL     *string    `db:"spec_url" json:"spec_url,omitempty"`
-	SpecContent *string    `db:"spec_content" json:"spec_content,omitempty"`
-	Status      string     `db:"status" json:"status"`
-	ToolsCount  int        `db:"tools_count" json:"tools_count"`
-	LastSyncAt  *time.Time `db:"last_sync_at" json:"last_sync_at"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	ID             string     `db:"id" json:"id"`
+	TenantID       string     `db:"tenant_id" json:"tenant_id"`
+	Name           string     `db:"name" json:"name"`
+	Type           string     `db:"type" json:"type"`
+	BaseURL        string     `db:"base_url" json:"base_url"`
+	TransportType  *string    `db:"transport_type" json:"transport_type,omitempty"`   // sse / streamable_http，MCP传输方式
+	MCPServerURL   *string    `db:"mcp_server_url" json:"mcp_server_url,omitempty"`
+	Headers        *string    `db:"headers" json:"headers,omitempty"`                 // JSON: 自定义HTTP头
+	AuthType       *string    `db:"auth_type" json:"auth_type,omitempty"`
+	AuthConfig     *string    `db:"auth_config" json:"auth_config,omitempty"`
+	SpecURL        *string    `db:"spec_url" json:"spec_url,omitempty"`
+	SpecContent    *string    `db:"spec_content" json:"spec_content,omitempty"`
+	Status         string     `db:"status" json:"status"`
+	ToolsCount     int        `db:"tools_count" json:"tools_count"`
+	LastSyncAt     *time.Time `db:"last_sync_at" json:"last_sync_at,omitempty"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // MCPTool MCP工具模型
@@ -113,14 +118,23 @@ type MCPTool struct {
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 }
 
-// MemoryPool 记忆池模型
+// MemoryPool 记忆池模型 - 记忆的"作用域" + "检索策略"
 type MemoryPool struct {
-	ID        string    `db:"id" json:"id"`
-	TenantID  string    `db:"tenant_id" json:"tenant_id"`
-	Level     string    `db:"level" json:"level"`
-	OwnerID   string    `db:"owner_id" json:"owner_id"`
-	Name      string    `db:"name" json:"name"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	ID           string     `db:"id" json:"id"`
+	TenantID     string     `db:"tenant_id" json:"tenant_id"`
+	Name         string     `db:"name" json:"name"`
+	Description  *string    `db:"description" json:"description,omitempty"`
+	Type         string     `db:"type" json:"type"`                     // personal / team / system
+	Purpose      string     `db:"purpose" json:"purpose"`               // conversation / skill / knowledge
+	Priority     int        `db:"priority" json:"priority"`             // 1-10, 越高越优先
+	MaxTokens    int        `db:"max_tokens" json:"max_tokens"`         // 该池最大注入token数, 0=不限
+	AutoActivate bool       `db:"auto_activate" json:"auto_activate"`   // 是否默认激活
+	TriggerRules *string    `db:"trigger_rules" json:"trigger_rules,omitempty"` // JSON: 条件触发规则
+	OwnerID      *string    `db:"owner_id" json:"owner_id,omitempty"`   // 个人级池的拥有者
+	Enabled      bool       `db:"enabled" json:"enabled"`
+	MemoryCount  int        `db:"memory_count" json:"memory_count"`     // 池中记忆数量（冗余字段）
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // MemoryEntry 记忆条目模型
@@ -135,17 +149,23 @@ type MemoryEntry struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
-// Skill Skill模板模型
+// Skill Skill模板模型 - 标准智能体范式
 type Skill struct {
 	ID                 string  `db:"id" json:"id"`
 	TenantID           string  `db:"tenant_id" json:"tenant_id"`
 	Name               string  `db:"name" json:"name"`
 	Description        *string `db:"description" json:"description,omitempty"`
+	Category           *string `db:"category" json:"category,omitempty"`       // 分类: 数据处理/工作流/API调用/自定义
 	Version            string  `db:"version" json:"version"`
-	Triggers           *string `db:"triggers" json:"triggers,omitempty"`
-	Steps              string  `db:"steps" json:"steps"`
+	Tags               *string `db:"tags" json:"tags,omitempty"`               // JSON数组: 标签
+	Triggers           *string `db:"triggers" json:"triggers,omitempty"`       // JSON: 触发条件
+	InputSchema        *string `db:"input_schema" json:"input_schema,omitempty"` // JSON Schema: 输入参数定义
+	OutputSchema       *string `db:"output_schema" json:"output_schema,omitempty"` // JSON Schema: 输出定义
+	Steps              string  `db:"steps" json:"steps"`                       // JSON数组: 执行步骤定义
 	PermissionTopology *string `db:"permission_topology" json:"permission_topology,omitempty"`
-	Status             string  `db:"status" json:"status"`
+	Status             string  `db:"status" json:"status"`                     // draft/active/archived
+	UsageCount         int     `db:"usage_count" json:"usage_count"`           // 使用次数
+	LastUsedAt         *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
 	CreatedBy          *string `db:"created_by" json:"created_by,omitempty"`
 	CreatedAt          time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt          time.Time `db:"updated_at" json:"updated_at"`

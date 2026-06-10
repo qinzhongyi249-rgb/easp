@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, Tag, App, Segmented, Checkbox, Descriptions, Badge } from 'antd';
-import { PlusOutlined, DeleteOutlined, LockOutlined, UndoOutlined, SafetyCertificateOutlined, KeyOutlined, CopyOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, Tag, App, Segmented, Checkbox, Descriptions, Badge, Dropdown } from 'antd';
+import { PlusOutlined, DeleteOutlined, LockOutlined, UndoOutlined, SafetyCertificateOutlined, KeyOutlined, CopyOutlined, MoreOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { TenantUser } from '../api/user';
 import type { Role } from '../api/role';
@@ -21,6 +21,7 @@ const Users: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [filter, setFilter] = useState<UserFilter>('active');
+  const isMobile = window.innerWidth < 768;
 
   // 角色管理弹窗状态
   const [roleModalOpen, setRoleModalOpen] = useState(false);
@@ -66,7 +67,6 @@ const Users: React.FC = () => {
     catch { message.error('恢复失败'); }
   };
 
-  // 重置密码：生成随机密码
   const onResetPassword = useCallback(async (user: TenantUser & { is_admin?: boolean }) => {
     setResetUser(user);
     setResetPassword('');
@@ -84,7 +84,6 @@ const Users: React.FC = () => {
     }
   }, [currentTenant]);
 
-  // 确认保存密码
   const confirmResetPassword = async () => {
     if (!resetUser || !resetPassword) return;
     setResetLoading(true);
@@ -99,7 +98,6 @@ const Users: React.FC = () => {
     }
   };
 
-  // 复制到剪贴板
   const copyPassword = async () => {
     try {
       await navigator.clipboard.writeText(resetPassword);
@@ -109,7 +107,6 @@ const Users: React.FC = () => {
     }
   };
 
-  // 打开角色管理弹窗
   const openRoleModal = useCallback(async (user: TenantUser & { is_admin?: boolean }) => {
     setRoleModalUser(user);
     setRoleModalOpen(true);
@@ -122,26 +119,19 @@ const Users: React.FC = () => {
     }
   }, []);
 
-  // 保存角色变更
   const saveRoles = async () => {
     if (!roleModalUser) return;
     setRoleSaving(true);
     try {
-      // 获取当前角色
       const res = await userApi.getRoles(roleModalUser.id);
       const currentRoles = (res.data || []) as Role[];
       const currentIds = currentRoles.map(r => r.id);
-
-      // 计算需要新增和移除的
       const toAdd = userRoleIds.filter(id => !currentIds.includes(id));
       const toRemove = currentIds.filter(id => !userRoleIds.includes(id));
-
-      // 批量操作
       await Promise.all([
         ...toAdd.map(roleId => userApi.assignRole(roleModalUser.id, roleId)),
         ...toRemove.map(roleId => userApi.revokeRole(roleModalUser.id, roleId)),
       ]);
-
       message.success('角色更新成功');
       setRoleModalOpen(false);
       load();
@@ -153,77 +143,99 @@ const Users: React.FC = () => {
     }
   };
 
-  // 根据筛选条件过滤用户
   const filteredUsers = users.filter(user => {
     if (filter === 'active') return !user.deleted_at;
     if (filter === 'deleted') return !!user.deleted_at;
     return true;
   });
 
+  // 移动端操作菜单
+  const getActionItems = (record: TenantUser & { is_admin?: boolean }) => {
+    if (record.deleted_at) {
+      return [{ key: 'restore', label: '恢复', icon: <UndoOutlined />, onClick: () => onRestore(record.id) }];
+    }
+    if (record.is_admin) {
+      return [{ key: 'none', label: '不可操作', disabled: true }];
+    }
+    return [
+      { key: 'role', label: '角色管理', icon: <SafetyCertificateOutlined />, onClick: () => openRoleModal(record) },
+      { key: 'reset', label: '重置密码', icon: <KeyOutlined />, onClick: () => onResetPassword(record) },
+      { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) },
+    ];
+  };
+
   const columns = [
     { 
       title: '邮箱', 
       dataIndex: 'email', 
       key: 'email',
+      ellipsis: isMobile,
       render: (v: string, record: TenantUser & { is_admin?: boolean; role_names?: string[] }) => (
-        <Space>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} size={4}>
           <span style={record.deleted_at ? { textDecoration: 'line-through', color: '#999' } : {}}>{v}</span>
-          {record.is_admin && <Tag icon={<LockOutlined />} color="gold">超级管理员</Tag>}
-          {!record.is_admin && record.role_names?.includes('管理员') && <Tag icon={<SafetyCertificateOutlined />} color="blue">管理员</Tag>}
-          {record.deleted_at && <Tag color="default">已注销</Tag>}
+          <Space size={4}>
+            {record.is_admin && <Tag icon={<LockOutlined />} color="gold">超级管理员</Tag>}
+            {!record.is_admin && record.role_names?.includes('管理员') && <Tag icon={<SafetyCertificateOutlined />} color="blue">管理员</Tag>}
+            {record.deleted_at && <Tag color="default">已注销</Tag>}
+          </Space>
         </Space>
       )
     },
-    { title: '显示名', dataIndex: 'display_name', key: 'display_name' },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={v === 'active' ? 'green' : 'red'}>{v}</Tag> },
-    { title: '登录次数', dataIndex: 'login_count', key: 'login_count' },
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    ...(!isMobile ? [
+      { title: '显示名', dataIndex: 'display_name', key: 'display_name' },
+      { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={v === 'active' ? 'green' : 'red'}>{v}</Tag> },
+      { title: '登录次数', dataIndex: 'login_count', key: 'login_count' },
+      { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    ] : []),
     { 
       title: '操作', 
       key: 'action', 
-      width: 220,
+      width: isMobile ? 60 : 220,
       render: (_: unknown, record: TenantUser & { is_admin?: boolean }) => (
-        <Space>
-          {record.deleted_at ? (
-            <Popconfirm title="确认恢复此用户?" onConfirm={() => onRestore(record.id)}>
-              <Button size="small" type="primary" icon={<UndoOutlined />}>恢复</Button>
-            </Popconfirm>
-          ) : record.is_admin ? (
-            <Tag color="default">不可操作</Tag>
-          ) : (
-            <>
-              <Button size="small" icon={<SafetyCertificateOutlined />} onClick={() => openRoleModal(record)}>
-                角色管理
-              </Button>
-              <Button size="small" icon={<KeyOutlined />} onClick={() => onResetPassword(record)}>
-                重置密码
-              </Button>
-              <Popconfirm title="确认删除此用户?" onConfirm={() => onDelete(record.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+        isMobile ? (
+          <Dropdown menu={{ items: getActionItems(record) }} trigger={['click']}>
+            <Button type="text" icon={<MoreOutlined />} />
+          </Dropdown>
+        ) : (
+          <Space>
+            {record.deleted_at ? (
+              <Popconfirm title="确认恢复此用户?" onConfirm={() => onRestore(record.id)}>
+                <Button size="small" type="primary" icon={<UndoOutlined />}>恢复</Button>
               </Popconfirm>
-            </>
-          )}
-        </Space>
+            ) : record.is_admin ? (
+              <Tag color="default">不可操作</Tag>
+            ) : (
+              <>
+                <Button size="small" icon={<SafetyCertificateOutlined />} onClick={() => openRoleModal(record)}>角色管理</Button>
+                <Button size="small" icon={<KeyOutlined />} onClick={() => onResetPassword(record)}>重置密码</Button>
+                <Popconfirm title="确认删除此用户?" onConfirm={() => onDelete(record.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              </>
+            )}
+          </Space>
+        )
       )
     },
   ];
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={3}>用户管理</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
+        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>用户管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setModalOpen(true); }}>新建用户</Button>
       </div>
       
       <div style={{ marginBottom: 16 }}>
         <Segmented
           options={[
-            { label: '正常用户', value: 'active' },
-            { label: '已注销用户', value: 'deleted' },
+            { label: '正常', value: 'active' },
+            { label: '已注销', value: 'deleted' },
             { label: '全部', value: 'all' },
           ]}
           value={filter}
           onChange={(value) => setFilter(value as UserFilter)}
+          size={isMobile ? 'small' : 'middle'}
         />
       </div>
 
@@ -232,12 +244,15 @@ const Users: React.FC = () => {
         columns={columns} 
         rowKey="id" 
         loading={loading}
+        size={isMobile ? 'small' : 'middle'}
+        scroll={isMobile ? { x: 400 } : undefined}
+        pagination={isMobile ? { pageSize: 10, size: 'small' } : undefined}
         rowClassName={(record) => record.deleted_at ? 'deleted-row' : ''}
       />
       
       {/* 新建用户弹窗 */}
-      <Modal title="新建用户" open={modalOpen} onOk={onCreate} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical">
+      <Modal title="新建用户" open={modalOpen} onOk={onCreate} onCancel={() => setModalOpen(false)} width={isMobile ? '90%' : 420}>
+        <Form form={form} layout="vertical" size={isMobile ? 'middle' : 'large'}>
           <Form.Item name="email" label="邮箱" rules={[{ required: true }, { type: 'email' }]}><Input /></Form.Item>
           <Form.Item name="password" label="密码" rules={[{ required: true }, { min: 6 }]}><Input.Password /></Form.Item>
           <Form.Item name="display_name" label="显示名称"><Input /></Form.Item>
@@ -246,19 +261,14 @@ const Users: React.FC = () => {
 
       {/* 角色管理弹窗 */}
       <Modal
-        title={
-          <Space>
-            <SafetyCertificateOutlined />
-            <span>角色管理 — {roleModalUser?.email}</span>
-          </Space>
-        }
+        title={<Space><SafetyCertificateOutlined /><span>角色管理 — {roleModalUser?.email}</span></Space>}
         open={roleModalOpen}
         onOk={saveRoles}
         onCancel={() => setRoleModalOpen(false)}
         confirmLoading={roleSaving}
         okText="保存"
         cancelText="取消"
-        width={500}
+        width={isMobile ? '90%' : 500}
       >
         {roleModalUser && (
           <div>
@@ -323,22 +333,15 @@ const Users: React.FC = () => {
 
       {/* 重置密码弹窗 */}
       <Modal
-        title={
-          <Space>
-            <KeyOutlined />
-            <span>重置密码 — {resetUser?.email}</span>
-          </Space>
-        }
+        title={<Space><KeyOutlined /><span>重置密码 — {resetUser?.email}</span></Space>}
         open={resetModalOpen}
         onCancel={() => setResetModalOpen(false)}
-        width={480}
+        width={isMobile ? '90%' : 480}
         footer={resetSaved ? [
           <Button key="close" onClick={() => setResetModalOpen(false)}>关闭</Button>
         ] : [
           <Button key="cancel" onClick={() => setResetModalOpen(false)}>取消</Button>,
-          <Button key="confirm" type="primary" loading={resetLoading} onClick={confirmResetPassword}>
-            确认保存
-          </Button>
+          <Button key="confirm" type="primary" loading={resetLoading} onClick={confirmResetPassword}>确认保存</Button>
         ]}
       >
         {resetLoading && !resetPassword ? (
@@ -351,12 +354,12 @@ const Users: React.FC = () => {
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '12px 16px', background: '#f6ffed', border: '1px solid #b7eb8f',
-              borderRadius: 8, marginBottom: 12
+              borderRadius: 8, marginBottom: 12, flexDirection: isMobile ? 'column' : 'row'
             }}>
-              <Text strong style={{ fontSize: 18, fontFamily: 'monospace', flex: 1, letterSpacing: 2 }}>
+              <Text strong style={{ fontSize: isMobile ? 14 : 18, fontFamily: 'monospace', flex: 1, letterSpacing: 2, wordBreak: 'break-all' }}>
                 {resetPassword}
               </Text>
-              <Button icon={<CopyOutlined />} onClick={copyPassword}>复制</Button>
+              <Button icon={<CopyOutlined />} onClick={copyPassword} size={isMobile ? 'small' : 'middle'}>复制</Button>
             </div>
             {resetSaved && (
               <div style={{ color: '#52c41a', fontWeight: 500 }}>

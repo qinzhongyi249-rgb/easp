@@ -166,6 +166,7 @@ type SSEMessage struct {
 // MCPSession MCP会话
 type MCPSession struct {
 	ID           string
+	TenantID     string // 租户ID
 	ClientInfo   ClientInfo
 	Capabilities ClientCapabilities
 	CreatedAt    time.Time

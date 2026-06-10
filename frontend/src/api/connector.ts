@@ -6,10 +6,14 @@ export interface Connector {
   name: string;
   type: string;
   base_url: string;
-  auth_type: string;
+  transport_type?: 'sse' | 'streamable_http';
+  mcp_server_url?: string;
+  headers?: string; // JSON: 自定义HTTP头
+  auth_type?: string;
   auth_config?: string;
   openapi_spec?: string;
   status: string;
+  tools_count?: number;
   created_at: string;
   updated_at: string;
 }

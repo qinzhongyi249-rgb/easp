@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tabs, Tag, Select } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tabs, Tag, Select, Dropdown } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined, TeamOutlined, MoreOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Role } from '../api/role';
 import { roleApi } from '../api/role';
+import { mcpToolApi } from '../api/mcpTool';
+import { skillApi } from '../api/skill';
 import { useAuth } from '../contexts/AuthContext';
 
 const { Title, Text } = Typography;
 interface LayoutContext { currentTenant: string; }
 
-// 工具权限选项
 const TOOL_OPTIONS = [
   { label: '连接器管理', value: 'connectors', desc: '创建、编辑、删除连接器' },
   { label: 'MCP工具管理', value: 'mcp-tools', desc: '管理MCP工具配置' },
@@ -22,14 +23,12 @@ const TOOL_OPTIONS = [
   { label: 'SSO配置', value: 'sso-config', desc: '配置单点登录' },
 ];
 
-// 数据范围选项
 const DATA_SCOPE_OPTIONS = [
   { label: '全部数据', value: 'all', desc: '可访问租户下所有数据' },
   { label: '本部门数据', value: 'department', desc: '仅可访问本部门数据' },
   { label: '仅个人数据', value: 'self', desc: '仅可访问自己创建的数据' },
 ];
 
-// 限流预设
 const RATE_LIMIT_PRESETS = [
   { label: '不限制', value: '' },
   { label: '100次/小时', value: '100/hour' },
@@ -50,6 +49,11 @@ const Roles: React.FC = () => {
   const [editing, setEditing] = useState<Role | null>(null);
   const [form] = Form.useForm();
   const [rateLimitMode, setRateLimitMode] = useState<string>('');
+  const isMobile = window.innerWidth < 768;
+
+  // MCP工具和技能列表（用于权限选择）
+  const [mcpTools, setMcpTools] = useState<{id: string; name: string; description?: string}[]>([]);
+  const [skills, setSkills] = useState<{id: string; name: string; description?: string}[]>([]);
 
   const load = async () => {
     if (!currentTenant) return;
@@ -71,19 +75,42 @@ const Roles: React.FC = () => {
     }
   };
 
+  const loadToolsAndSkills = async () => {
+    if (!currentTenant) return;
+    try {
+      const [toolsRes, skillsRes] = await Promise.all([
+        mcpToolApi.list(currentTenant).catch(() => ({ data: [] })),
+        skillApi.list(currentTenant).catch(() => ({ data: [] })),
+      ]);
+      const toolsData = Array.isArray(toolsRes.data) ? toolsRes.data : [];
+      const skillsData = Array.isArray(skillsRes.data) ? skillsRes.data : [];
+      setMcpTools(toolsData.map((t: {id: string; name: string; description?: string}) => ({ id: t.id, name: t.name, description: t.description })));
+      setSkills(skillsData.map((s: {id: string; name: string; description?: string}) => ({ id: s.id, name: s.name, description: s.description })));
+    } catch {
+      // 静默失败
+    }
+  };
+
   useEffect(() => { load(); }, [currentTenant]);
+  useEffect(() => { loadToolsAndSkills(); }, [currentTenant]);
 
   const onOk = async () => {
     const values = await form.validateFields();
-    // tools 从数组转为 JSON 字符串
     if (values.tools && Array.isArray(values.tools)) {
       values.tools = JSON.stringify(values.tools);
+    }
+    if (values.allowed_mcp_tools && Array.isArray(values.allowed_mcp_tools)) {
+      values.allowed_mcp_tools = JSON.stringify(values.allowed_mcp_tools);
+    }
+    if (values.allowed_skills && Array.isArray(values.allowed_skills)) {
+      values.allowed_skills = JSON.stringify(values.allowed_skills);
     }
     try {
       if (editing) { await roleApi.update(currentTenant, editing.id, values); message.success('更新成功'); }
       else { await roleApi.create(currentTenant, values); message.success('创建成功'); }
       setModalOpen(false); form.resetFields(); setEditing(null); load();
-    } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败'); }
+    } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败')
+    }
   };
 
   const onDelete = async (id: string) => {
@@ -94,16 +121,19 @@ const Roles: React.FC = () => {
   const openModal = (record?: Role) => {
     if (record) {
       setEditing(record);
-      // 解析 tools JSON 字符串为数组
       let toolsArray: string[] = [];
       if (record.tools) {
         try { toolsArray = JSON.parse(record.tools); } catch { toolsArray = []; }
       }
-      form.setFieldsValue({
-        ...record,
-        tools: toolsArray,
-      });
-      // 设置限流模式
+      let allowedMCPTools: string[] = [];
+      if (record.allowed_mcp_tools) {
+        try { allowedMCPTools = JSON.parse(record.allowed_mcp_tools); } catch { allowedMCPTools = []; }
+      }
+      let allowedSkills: string[] = [];
+      if (record.allowed_skills) {
+        try { allowedSkills = JSON.parse(record.allowed_skills); } catch { allowedSkills = []; }
+      }
+      form.setFieldsValue({ ...record, tools: toolsArray, allowed_mcp_tools: allowedMCPTools, allowed_skills: allowedSkills });
       const preset = RATE_LIMIT_PRESETS.find(p => p.value === record.rate_limit);
       if (preset && preset.value) {
         setRateLimitMode(preset.value);
@@ -122,46 +152,78 @@ const Roles: React.FC = () => {
 
   const tenantColumns = [
     { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, r: Role) => (
-      <span>{v} {r.is_default && <Tag color="blue">默认</Tag>}</span>
-    )},
-    { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
-    { title: '工具权限', dataIndex: 'tools', key: 'tools', render: (v: string) => {
-      if (!v) return <Text type="secondary">-</Text>;
-      try {
-        const tools: string[] = JSON.parse(v);
-        return (
-          <Space size={[0, 4]} wrap>
-            {tools.map(t => {
-              const opt = TOOL_OPTIONS.find(o => o.value === t);
-              return <Tag key={t} color="blue">{opt?.label || t}</Tag>;
-            })}
-          </Space>
-        );
-      } catch { return <Text type="secondary">{v}</Text>; }
-    }},
-    { title: '限流', dataIndex: 'rate_limit', key: 'rate_limit', render: (v: string) => v || <Text type="secondary">不限</Text> },
-    { title: '数据范围', dataIndex: 'data_scope', key: 'data_scope', render: (v: string) => {
-      const opt = DATA_SCOPE_OPTIONS.find(o => o.value === v);
-      return opt ? <Tag>{opt.label}</Tag> : (v || <Text type="secondary">-</Text>);
-    }},
-    { title: '操作', key: 'action', render: (_: unknown, record: Role) => (
-      <Space>
-        <Button size="small" icon={<EditOutlined />} onClick={() => openModal(record)}>编辑</Button>
-        {!record.is_default && (
-          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-          </Popconfirm>
-        )}
+      <Space direction={isMobile ? 'vertical' : 'horizontal'} size={4}>
+        <span>{v}</span>
+        {r.is_default && <Tag color="blue">默认</Tag>}
       </Space>
+    )},
+    ...(!isMobile ? [
+      { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+      { title: '工具权限', dataIndex: 'tools', key: 'tools', render: (v: string) => {
+        if (!v) return <Text type="secondary">-</Text>;
+        try {
+          const tools: string[] = JSON.parse(v);
+          return (
+            <Space size={[0, 4]} wrap>
+              {tools.map(t => {
+                const opt = TOOL_OPTIONS.find(o => o.value === t);
+                return <Tag key={t} color="blue">{opt?.label || t}</Tag>;
+              })}
+            </Space>
+          );
+        } catch { return <Text type="secondary">{v}</Text>; }
+      }},
+      { title: 'MCP工具权限', dataIndex: 'allowed_mcp_tools', key: 'allowed_mcp_tools', render: (v: string) => {
+        if (!v) return <Text type="secondary">全部（未限制）</Text>;
+        try {
+          const ids: string[] = JSON.parse(v);
+          if (ids.length === 0) return <Text type="secondary">无权限</Text>;
+          return <Tag color="orange">{ids.length} 个工具</Tag>;
+        } catch { return <Text type="secondary">-</Text>; }
+      }},
+      { title: '技能权限', dataIndex: 'allowed_skills', key: 'allowed_skills', render: (v: string) => {
+        if (!v) return <Text type="secondary">全部（未限制）</Text>;
+        try {
+          const ids: string[] = JSON.parse(v);
+          if (ids.length === 0) return <Text type="secondary">无权限</Text>;
+          return <Tag color="purple">{ids.length} 个技能</Tag>;
+        } catch { return <Text type="secondary">-</Text>; }
+      }},
+      { title: '限流', dataIndex: 'rate_limit', key: 'rate_limit', render: (v: string) => v || <Text type="secondary">不限</Text> },
+      { title: '数据范围', dataIndex: 'data_scope', key: 'data_scope', render: (v: string) => {
+        const opt = DATA_SCOPE_OPTIONS.find(o => o.value === v);
+        return opt ? <Tag>{opt.label}</Tag> : (v || <Text type="secondary">-</Text>);
+      }},
+    ] : []),
+    { title: '操作', key: 'action', width: isMobile ? 60 : 150, render: (_: unknown, record: Role) => (
+      isMobile ? (
+        <Dropdown menu={{ items: [
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, onClick: () => openModal(record) },
+          ...(!record.is_default ? [{ key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) }] : []),
+        ]}} trigger={['click']}>
+          <Button type="text" icon={<MoreOutlined />} />
+        </Dropdown>
+      ) : (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openModal(record)}>编辑</Button>
+          {!record.is_default && (
+            <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      )
     )},
   ];
 
   const systemColumns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
-    { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
-    { title: '工具权限', dataIndex: 'tools', key: 'tools', ellipsis: true },
-    { title: '限流', dataIndex: 'rate_limit', key: 'rate_limit' },
-    { title: '数据范围', dataIndex: 'data_scope', key: 'data_scope' },
+    ...(!isMobile ? [
+      { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+      { title: '工具权限', dataIndex: 'tools', key: 'tools', ellipsis: true },
+      { title: '限流', dataIndex: 'rate_limit', key: 'rate_limit' },
+      { title: '数据范围', dataIndex: 'data_scope', key: 'data_scope' },
+    ] : []),
     { title: '状态', key: 'status', render: () => <Tag color="green">系统级</Tag> },
   ];
 
@@ -174,7 +236,15 @@ const Roles: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>新建角色</Button>
           </div>
-          <Table dataSource={tenantRoles} columns={tenantColumns} rowKey="id" loading={loading} pagination={false} />
+          <Table 
+            dataSource={tenantRoles} 
+            columns={tenantColumns} 
+            rowKey="id" 
+            loading={loading} 
+            pagination={false}
+            size={isMobile ? 'small' : 'middle'}
+            scroll={isMobile ? { x: 300 } : undefined}
+          />
         </>
       ),
     },
@@ -182,30 +252,38 @@ const Roles: React.FC = () => {
       key: 'system',
       label: <span><SafetyCertificateOutlined /> 系统角色</span>,
       children: (
-        <Table dataSource={systemRoles} columns={systemColumns} rowKey="id" loading={loading} pagination={false} />
+        <Table 
+          dataSource={systemRoles} 
+          columns={systemColumns} 
+          rowKey="id" 
+          loading={loading} 
+          pagination={false}
+          size={isMobile ? 'small' : 'middle'}
+          scroll={isMobile ? { x: 300 } : undefined}
+        />
       ),
     }] : []),
   ];
 
   return (
     <div>
-      <Title level={3}>角色管理</Title>
-      <Tabs items={tabItems} defaultActiveKey="tenant" />
+      <Title level={isMobile ? 4 : 3}>角色管理</Title>
+      <Tabs items={tabItems} defaultActiveKey="tenant" size={isMobile ? 'small' : 'middle'} />
       <Modal 
         title={editing ? '编辑角色' : '新建角色'} 
         open={modalOpen} 
         onOk={onOk} 
         onCancel={() => setModalOpen(false)}
-        width={600}
+        width={isMobile ? '90%' : 600}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" size={isMobile ? 'middle' : 'large'}>
           <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]}>
             <Input placeholder="如：开发者、运维人员、访客" />
           </Form.Item>
           <Form.Item name="description" label="角色描述">
             <Input.TextArea rows={2} placeholder="描述该角色的职责和权限范围" />
           </Form.Item>
-          <Form.Item name="tools" label="工具权限" extra="选择该角色可以使用的功能模块">
+          <Form.Item name="tools" label="功能权限" extra="选择该角色可以使用的功能模块（UI菜单权限）">
             <Select
               mode="multiple"
               placeholder="选择可使用的功能模块"
@@ -222,8 +300,44 @@ const Roles: React.FC = () => {
               allowClear
             />
           </Form.Item>
+          <Form.Item name="allowed_mcp_tools" label="MCP工具权限" extra="选择该角色可以使用的MCP工具。不选择表示无MCP工具权限，留空则无法使用任何MCP工具">
+            <Select
+              mode="multiple"
+              placeholder="选择允许使用的MCP工具"
+              options={mcpTools.map(t => ({
+                label: (
+                  <div>
+                    <div>{t.name}</div>
+                    {t.description && <Text type="secondary" style={{ fontSize: 12 }}>{t.description}</Text>}
+                  </div>
+                ),
+                value: t.id,
+              }))}
+              maxTagCount="responsive"
+              allowClear
+              notFoundContent="暂无MCP工具"
+            />
+          </Form.Item>
+          <Form.Item name="allowed_skills" label="技能权限" extra="选择该角色可以执行的技能。不选择表示无技能权限，留空则无法使用任何技能">
+            <Select
+              mode="multiple"
+              placeholder="选择允许使用的技能"
+              options={skills.map(s => ({
+                label: (
+                  <div>
+                    <div>{s.name}</div>
+                    {s.description && <Text type="secondary" style={{ fontSize: 12 }}>{s.description}</Text>}
+                  </div>
+                ),
+                value: s.id,
+              }))}
+              maxTagCount="responsive"
+              allowClear
+              notFoundContent="暂无技能"
+            />
+          </Form.Item>
           <Form.Item label="访问频率限制">
-            <Space>
+            <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
               <Select
                 value={rateLimitMode}
                 onChange={(v) => {
@@ -232,12 +346,12 @@ const Roles: React.FC = () => {
                     form.setFieldValue('rate_limit', v);
                   }
                 }}
-                style={{ width: 160 }}
+                style={{ width: isMobile ? '100%' : 160 }}
                 options={RATE_LIMIT_PRESETS}
               />
               {rateLimitMode === 'custom' && (
                 <Form.Item name="rate_limit" noStyle>
-                  <Input placeholder="如：200/hour, 50/minute" style={{ width: 200 }} />
+                  <Input placeholder="如：200/hour, 50/minute" style={{ width: isMobile ? '100%' : 200 }} />
                 </Form.Item>
               )}
             </Space>

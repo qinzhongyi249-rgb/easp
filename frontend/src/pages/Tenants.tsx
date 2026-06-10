@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Tag } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Tag, Dropdown } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, MoreOutlined } from '@ant-design/icons';
 import type { Tenant } from '../api/tenant';
 import { tenantApi } from '../api/tenant';
 
@@ -14,6 +14,7 @@ const Tenants: React.FC = () => {
   const [editing, setEditing] = useState<Tenant | null>(null);
   const [form] = Form.useForm();
   const [isPermanent, setIsPermanent] = useState(true);
+  const isMobile = window.innerWidth < 768;
 
   const load = async () => {
     setLoading(true);
@@ -33,7 +34,6 @@ const Tenants: React.FC = () => {
       };
       
       if (editing) {
-        // 编辑模式
         payload.status = values.status || editing.status;
         if (isPermanent) {
           payload.expires_at = '';
@@ -43,7 +43,6 @@ const Tenants: React.FC = () => {
         await tenantApi.update(editing.id, payload as Partial<Tenant>);
         message.success('更新成功');
       } else {
-        // 新建模式
         payload.admin_email = values.admin_email;
         payload.admin_pass = values.admin_pass;
         if (!isPermanent && values.expires_at) {
@@ -73,7 +72,6 @@ const Tenants: React.FC = () => {
     if (expiry < now) {
       return <Tag color="red">已过期</Tag>;
     }
-    // 30天内过期
     const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     if (expiry < thirtyDays) {
       return <Tag color="orange">即将过期</Tag>;
@@ -82,48 +80,81 @@ const Tenants: React.FC = () => {
   };
 
   const columns = [
-    { title: 'ID', dataIndex: 'id', key: 'id', ellipsis: true },
+    ...(!isMobile ? [
+      { title: 'ID', dataIndex: 'id', key: 'id', ellipsis: true },
+    ] : []),
     { title: '名称', dataIndex: 'name', key: 'name' },
-    { title: '套餐', dataIndex: 'plan', key: 'plan' },
+    ...(!isMobile ? [
+      { title: '套餐', dataIndex: 'plan', key: 'plan' },
+    ] : []),
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => v === 'active' ? <Tag color="green">正常</Tag> : <Tag color="red">{v}</Tag> },
-    { title: '到期时间', key: 'expires_at', render: (_: unknown, record: Tenant) => getExpiryStatus(record) },
-    { title: '用户上限', dataIndex: 'max_users', key: 'max_users', render: (v: number) => v === 0 ? '不限' : v },
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
-    { title: '操作', key: 'action', render: (_: unknown, record: Tenant) => (
-      <Space>
-        <Button size="small" icon={<EditOutlined />} onClick={() => {
-          setEditing(record);
-          form.setFieldsValue({
-            name: record.name,
-            status: record.status,
-            max_users: record.max_users,
-            expires_at: record.expires_at ? record.expires_at.split('T')[0] : '',
-          });
-          setIsPermanent(!record.expires_at);
-          setModalOpen(true);
-        }}>编辑</Button>
-        <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-        </Popconfirm>
-      </Space>
+    { title: '到期', key: 'expires_at', render: (_: unknown, record: Tenant) => getExpiryStatus(record) },
+    ...(!isMobile ? [
+      { title: '用户上限', dataIndex: 'max_users', key: 'max_users', render: (v: number) => v === 0 ? '不限' : v },
+      { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    ] : []),
+    { title: '操作', key: 'action', width: isMobile ? 60 : 150, render: (_: unknown, record: Tenant) => (
+      isMobile ? (
+        <Dropdown menu={{ items: [
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, onClick: () => {
+            setEditing(record);
+            form.setFieldsValue({
+              name: record.name,
+              status: record.status,
+              max_users: record.max_users,
+              expires_at: record.expires_at ? record.expires_at.split('T')[0] : '',
+            });
+            setIsPermanent(!record.expires_at);
+            setModalOpen(true);
+          }},
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) },
+        ]}} trigger={['click']}>
+          <Button type="text" icon={<MoreOutlined />} />
+        </Dropdown>
+      ) : (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => {
+            setEditing(record);
+            form.setFieldsValue({
+              name: record.name,
+              status: record.status,
+              max_users: record.max_users,
+              expires_at: record.expires_at ? record.expires_at.split('T')[0] : '',
+            });
+            setIsPermanent(!record.expires_at);
+            setModalOpen(true);
+          }}>编辑</Button>
+          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      )
     )},
   ];
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={3}>租户管理</Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
+        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>租户管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setIsPermanent(true); setModalOpen(true); }}>新建租户</Button>
       </div>
-      <Table dataSource={tenants} columns={columns} rowKey="id" loading={loading} />
+      <Table 
+        dataSource={tenants} 
+        columns={columns} 
+        rowKey="id" 
+        loading={loading}
+        size={isMobile ? 'small' : 'middle'}
+        scroll={isMobile ? { x: 400 } : undefined}
+        pagination={isMobile ? { pageSize: 10, size: 'small' } : undefined}
+      />
       <Modal 
         title={editing ? '编辑租户' : '新建租户'} 
         open={modalOpen} 
         onOk={onOk} 
         onCancel={() => setModalOpen(false)}
-        width={500}
+        width={isMobile ? '90%' : 500}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" size={isMobile ? 'middle' : 'large'}>
           <Form.Item name="name" label="租户名称" rules={[{ required: true, message: '请输入租户名称' }]}>
             <Input placeholder="请输入租户名称" />
           </Form.Item>
@@ -135,7 +166,7 @@ const Tenants: React.FC = () => {
           )}
           
           <Form.Item label="到期设置">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <Switch 
                 checked={isPermanent} 
                 onChange={(checked) => setIsPermanent(checked)}
@@ -144,7 +175,7 @@ const Tenants: React.FC = () => {
               />
               {!isPermanent && (
                 <Form.Item name="expires_at" noStyle>
-                  <Input type="date" style={{ width: 200 }} placeholder="选择到期日期" />
+                  <Input type="date" style={{ width: isMobile ? '100%' : 200 }} placeholder="选择到期日期" />
                 </Form.Item>
               )}
             </div>

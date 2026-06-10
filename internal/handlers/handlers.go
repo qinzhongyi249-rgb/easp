@@ -857,6 +857,51 @@ func (h *MemoryHandler) SearchEntries(c *gin.Context) {
 	c.JSON(http.StatusOK, entries)
 }
 
+// GetPool 获取记忆池详情
+func (h *MemoryHandler) GetPool(c *gin.Context) {
+	poolID := c.Param("poolId")
+	pool, err := h.poolRepo.GetByID(poolID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Memory pool not found"})
+		return
+	}
+	c.JSON(http.StatusOK, pool)
+}
+
+// UpdatePool 更新记忆池
+func (h *MemoryHandler) UpdatePool(c *gin.Context) {
+	poolID := c.Param("poolId")
+	pool, err := h.poolRepo.GetByID(poolID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Memory pool not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(pool); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.poolRepo.Update(pool); err != nil {
+		log.Printf("Failed to update memory pool: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update memory pool", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, pool)
+}
+
+// DeletePool 删除记忆池
+func (h *MemoryHandler) DeletePool(c *gin.Context) {
+	poolID := c.Param("poolId")
+	if err := h.poolRepo.Delete(poolID); err != nil {
+		log.Printf("Failed to delete memory pool: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete memory pool", "details": err.Error()})
+		return
+	}
+	c.JSON(http.StatusNoContent, nil)
+}
+
 // AuditLogHandler 审计日志处理器
 type AuditLogHandler struct {
 	repo *repositories.AuditLogRepository

@@ -37,12 +37,12 @@ const Dashboard: React.FC = () => {
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = window.innerWidth < 768;
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
-        // 只有超级管理员才加载租户数
         if (isAdmin) {
           const tenantRes = await tenantApi.list();
           setTenantCount((tenantRes.data || []).length);
@@ -75,39 +75,38 @@ const Dashboard: React.FC = () => {
 
   return (
     <div>
-      <Title level={3}>仪表盘</Title>
-      <Row gutter={[24, 24]}>
-        {/* 只有超级管理员才显示租户数 */}
+      <Title level={isMobile ? 4 : 3} style={{ marginBottom: isMobile ? 16 : 24 }}>仪表盘</Title>
+      <Row gutter={[isMobile ? 12 : 24, isMobile ? 12 : 24]}>
         {isAdmin && (
-          <Col xs={24} sm={12} lg={8}>
-            <Card hoverable>
-              <Statistic title="租户数" value={tenantCount} prefix={<TeamOutlined />} />
+          <Col xs={12} sm={12} lg={8}>
+            <Card hoverable size={isMobile ? 'small' : 'default'}>
+              <Statistic title="租户数" value={tenantCount} prefix={<TeamOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
             </Card>
           </Col>
         )}
-        <Col xs={24} sm={12} lg={8}>
-          <Card hoverable>
-            <Statistic title="用户数" value={users.length} prefix={<UserOutlined />} />
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="用户数" value={users.length} prefix={<UserOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card hoverable>
-            <Statistic title="角色数" value={roles.length} prefix={<TeamOutlined />} />
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="角色数" value={roles.length} prefix={<TeamOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card hoverable>
-            <Statistic title="连接器" value={connectors.length} prefix={<ApiOutlined />} />
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="连接器" value={connectors.length} prefix={<ApiOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card hoverable>
-            <Statistic title="MCP工具" value={tools.length} prefix={<ToolOutlined />} />
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="MCP工具" value={tools.length} prefix={<ToolOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card hoverable>
-            <Statistic title="技能" value={skills.length} prefix={<BulbOutlined />} />
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="技能" value={skills.length} prefix={<BulbOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
           </Card>
         </Col>
       </Row>

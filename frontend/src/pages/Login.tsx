@@ -13,6 +13,7 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('login');
   const { message } = App.useApp();
+  const isMobile = window.innerWidth < 768;
 
   const onLogin = async (values: { email: string; password: string }) => {
     setLoading(true);
@@ -43,10 +44,21 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
-      <Card style={{ width: 420, borderRadius: 12 }} bodyStyle={{ padding: '40px 32px' }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <Title level={2} style={{ margin: 0 }}>EASP Platform</Title>
+    <div style={{
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      padding: isMobile ? 16 : 24,
+    }}>
+      <Card style={{
+        width: isMobile ? '100%' : 420,
+        borderRadius: 12,
+        maxWidth: 420,
+      }} bodyStyle={{ padding: isMobile ? '24px 16px' : '40px 32px' }}>
+        <div style={{ textAlign: 'center', marginBottom: isMobile ? 24 : 32 }}>
+          <Title level={isMobile ? 3 : 2} style={{ margin: 0 }}>EASP Platform</Title>
           <Text type="secondary">企业API转MCP服务平台</Text>
         </div>
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
@@ -54,7 +66,7 @@ const Login: React.FC = () => {
             key: 'login',
             label: '登录',
             children: (
-              <Form onFinish={onLogin} size="large">
+              <Form onFinish={onLogin} size={isMobile ? 'middle' : 'large'}>
                 <Form.Item name="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
                   <Input prefix={<UserOutlined />} placeholder="邮箱" />
                 </Form.Item>
@@ -74,7 +86,7 @@ const Login: React.FC = () => {
             key: 'register',
             label: '注册',
             children: (
-              <Form onFinish={onRegister} size="large">
+              <Form onFinish={onRegister} size={isMobile ? 'middle' : 'large'}>
                 <Form.Item name="tenant_id" rules={[{ required: true, message: '请输入租户ID' }]}>
                   <Input placeholder="租户ID" />
                 </Form.Item>

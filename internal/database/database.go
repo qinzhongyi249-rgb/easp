@@ -203,6 +203,34 @@ func AutoMigrate() error {
 		`ALTER TABLE tenants ADD COLUMN max_users INT NOT NULL DEFAULT 0 COMMENT '最大用户数，0=不限制' AFTER expires_at`,
 		// users 表新增字段
 		`ALTER TABLE users ADD COLUMN deleted_at DATETIME NULL DEFAULT NULL COMMENT '逻辑删除时间' AFTER login_count`,
+		// connectors 表新增 MCP Server URL
+		`ALTER TABLE connectors ADD COLUMN mcp_server_url VARCHAR(500) NULL DEFAULT NULL COMMENT 'MCP Server SSE地址' AFTER base_url`,
+		// connectors 表新增传输类型 + 自定义头
+		`ALTER TABLE connectors ADD COLUMN transport_type VARCHAR(32) NULL DEFAULT NULL COMMENT 'MCP传输方式: sse / streamable_http' AFTER base_url`,
+		`ALTER TABLE connectors ADD COLUMN headers TEXT NULL DEFAULT NULL COMMENT '自定义HTTP头JSON' AFTER mcp_server_url`,
+
+		// ========== 记忆池重构 ==========
+		// memory_pools 表新增字段
+		`ALTER TABLE memory_pools ADD COLUMN description TEXT NULL DEFAULT NULL COMMENT '描述' AFTER name`,
+		`ALTER TABLE memory_pools ADD COLUMN type VARCHAR(32) NOT NULL DEFAULT 'personal' COMMENT '类型: personal/team/system' AFTER description`,
+		`ALTER TABLE memory_pools ADD COLUMN purpose VARCHAR(32) NOT NULL DEFAULT 'conversation' COMMENT '用途: conversation/skill/knowledge' AFTER type`,
+		`ALTER TABLE memory_pools ADD COLUMN priority INT NOT NULL DEFAULT 5 COMMENT '优先级 1-10' AFTER purpose`,
+		`ALTER TABLE memory_pools ADD COLUMN max_tokens INT NOT NULL DEFAULT 0 COMMENT '最大注入token数, 0=不限' AFTER priority`,
+		`ALTER TABLE memory_pools ADD COLUMN auto_activate TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否默认激活' AFTER max_tokens`,
+		`ALTER TABLE memory_pools ADD COLUMN trigger_rules TEXT NULL DEFAULT NULL COMMENT 'JSON: 条件触发规则' AFTER auto_activate`,
+		`ALTER TABLE memory_pools ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用' AFTER trigger_rules`,
+		`ALTER TABLE memory_pools ADD COLUMN memory_count INT NOT NULL DEFAULT 0 COMMENT '池中记忆数量' AFTER enabled`,
+		`ALTER TABLE memory_pools ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '更新时间' AFTER created_at`,
+		// user_memories 表新增 pool_id
+		`ALTER TABLE user_memories ADD COLUMN pool_id VARCHAR(36) NULL DEFAULT NULL COMMENT '所属记忆池' AFTER user_id`,
+		// entities 表新增 pool_id
+		`ALTER TABLE entities ADD COLUMN pool_id VARCHAR(36) NULL DEFAULT NULL COMMENT '所属记忆池' AFTER tenant_id`,
+		// skill_memories 表新增 pool_id
+		`ALTER TABLE skill_memories ADD COLUMN pool_id VARCHAR(36) NULL DEFAULT NULL COMMENT '所属记忆池' AFTER user_id`,
+		// ========== 角色权限下沉 ==========
+		// roles 表新增 MCP工具和技能权限字段
+		`ALTER TABLE roles ADD COLUMN allowed_mcp_tools TEXT NULL DEFAULT NULL COMMENT '允许使用的MCP工具ID JSON数组' AFTER tools`,
+		`ALTER TABLE roles ADD COLUMN allowed_skills TEXT NULL DEFAULT NULL COMMENT '允许使用的技能ID JSON数组' AFTER allowed_mcp_tools`,
 	}
 
 	for _, alter := range alters {

@@ -1,79 +1,240 @@
-import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Typography, Popconfirm, Tag, App } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Connector } from '../api/connector';
 import { connectorApi } from '../api/connector';
 
 const { Title } = Typography;
-const { TextArea } = Input;
 interface LayoutContext { currentTenant: string; }
 
 const Connectors: React.FC = () => {
   const { currentTenant } = useOutletContext<LayoutContext>();
   const { message } = App.useApp();
-  const [data, setData] = useState<Connector[]>([]);
+  const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Connector | null>(null);
   const [form] = Form.useForm();
+  const isMobile = window.innerWidth < 768;
+
+  // 认证类型联动
+  const authType = Form.useWatch('auth_type', form);
 
   const load = async () => {
     if (!currentTenant) return;
     setLoading(true);
-    try { setData((await connectorApi.list(currentTenant)).data || []); }
+    try { const res = await connectorApi.list(currentTenant); setConnectors(res.data || []); }
     catch { message.error('加载失败'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [currentTenant]);
 
+  // 打开编辑弹窗时，解析 headers JSON 为 KV 数组
+  const openModal = useCallback((record?: Connector) => {
+    if (record) {
+      setEditing(record);
+      // 解析 headers JSON → KV 数组
+      let headersKV: { key: string; value: string }[] = [];
+      if (record.headers) {
+        try {
+          const obj = JSON.parse(record.headers);
+          headersKV = Object.entries(obj).map(([k, v]) => ({ key: k, value: String(v) }));
+        } catch { /* ignore */ }
+      }
+      if (headersKV.length === 0) headersKV = [{ key: '', value: '' }];
+
+      // 解析 auth_config JSON
+      let authConfigStr = record.auth_config || '';
+      if (authConfigStr) {
+        try { authConfigStr = JSON.stringify(JSON.parse(authConfigStr), null, 2); } catch { /* keep raw */ }
+      }
+
+      form.setFieldsValue({
+        ...record,
+        headers_kv: headersKV,
+        auth_config_text: authConfigStr,
+      });
+    } else {
+      setEditing(null);
+      form.resetFields();
+      form.setFieldsValue({
+        type: 'mcp',
+        auth_type: 'none',
+        transport_type: 'streamable_http',
+        headers_kv: [{ key: '', value: '' }],
+      });
+    }
+    setModalOpen(true);
+  }, [form]);
+
   const onOk = async () => {
     const values = await form.validateFields();
+
+    // 转换 headers KV 数组 → JSON
+    const headersObj: Record<string, string> = {};
+    (values.headers_kv || []).forEach((item: { key: string; value: string }) => {
+      if (item.key && item.key.trim()) {
+        headersObj[item.key.trim()] = item.value || '';
+      }
+    });
+    const headersJSON = Object.keys(headersObj).length > 0 ? JSON.stringify(headersObj) : null;
+
+    // 解析 auth_config
+    let authConfig = values.auth_config_text || null;
+    if (authConfig && authConfig.trim()) {
+      try { JSON.parse(authConfig); } catch { message.error('认证配置必须是合法JSON'); return; }
+    }
+
+    const payload: Partial<Connector> = {
+      name: values.name,
+      type: values.type,
+      base_url: values.base_url,
+      transport_type: values.transport_type || undefined,
+      mcp_server_url: values.mcp_server_url || undefined,
+      headers: headersJSON || undefined,
+      auth_type: values.auth_type === 'none' ? undefined : values.auth_type,
+      auth_config: authConfig || undefined,
+      status: 'active',
+    };
+
     try {
-      if (editing) { await connectorApi.update(currentTenant, editing.id, values); message.success('更新成功'); }
-      else { await connectorApi.create(currentTenant, values); message.success('创建成功'); }
+      if (editing) { await connectorApi.update(currentTenant, editing.id, payload); message.success('更新成功'); }
+      else { await connectorApi.create(currentTenant, payload); message.success('创建成功'); }
       setModalOpen(false); form.resetFields(); setEditing(null); load();
     } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败'); }
   };
 
-  const onSync = async (id: string) => {
-    try { await connectorApi.syncOpenAPI(currentTenant, id); message.success('同步成功'); load(); }
-    catch { message.error('同步失败'); }
+  const onDelete = async (id: string) => {
+    try { await connectorApi.delete(currentTenant, id); message.success('删除成功'); load(); }
+    catch { message.error('删除失败'); }
   };
 
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
-    { title: '类型', dataIndex: 'type', key: 'type', render: (v: string) => <Tag>{v}</Tag> },
-    { title: 'Base URL', dataIndex: 'base_url', key: 'base_url', ellipsis: true },
-    { title: '认证类型', dataIndex: 'auth_type', key: 'auth_type' },
+    ...(!isMobile ? [
+      { title: '类型', dataIndex: 'type', key: 'type', width: 80, render: (v: string) => <Tag>{v}</Tag> },
+      { title: '传输', dataIndex: 'transport_type', key: 'transport_type', width: 100, render: (v: string) => v ? <Tag color={v === 'sse' ? 'blue' : 'green'}>{v}</Tag> : '-' },
+      { title: '基础URL', dataIndex: 'base_url', key: 'base_url', ellipsis: true },
+      { title: 'MCP地址', dataIndex: 'mcp_server_url', key: 'mcp_server_url', ellipsis: true, render: (v: string) => v || '-' },
+      { title: '认证', dataIndex: 'auth_type', key: 'auth_type', width: 80, render: (v: string) => v ? <Tag color="orange">{v}</Tag> : '-' },
+    ] : []),
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={v === 'active' ? 'green' : 'red'}>{v}</Tag> },
-    { title: '操作', key: 'action', render: (_: unknown, record: Connector) => (
-      <Space>
-        <Button size="small" icon={<SyncOutlined />} onClick={() => onSync(record.id)}>同步</Button>
-        <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(record); form.setFieldsValue(record); setModalOpen(true); }}>编辑</Button>
-        <Popconfirm title="确认删除?" onConfirm={() => { connectorApi.delete(currentTenant, record.id).then(load); }}>
-          <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-        </Popconfirm>
-      </Space>
+    { title: '操作', key: 'action', width: isMobile ? 60 : 150, render: (_: unknown, record: Connector) => (
+      isMobile ? (
+        <Dropdown menu={{ items: [
+          { key: 'edit', label: '编辑', icon: <EditOutlined />, onClick: () => openModal(record) },
+          { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) },
+        ]}} trigger={['click']}>
+          <Button type="text" icon={<MoreOutlined />} />
+        </Dropdown>
+      ) : (
+        <Space>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openModal(record)}>编辑</Button>
+          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      )
     )},
   ];
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={3}>连接器管理</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>新建连接器</Button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
+        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><ApiOutlined /> 连接器</Title>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>新建连接器</Button>
       </div>
-      <Table dataSource={data} columns={columns} rowKey="id" loading={loading} />
-      <Modal title={editing ? '编辑连接器' : '新建连接器'} open={modalOpen} onOk={onOk} onCancel={() => setModalOpen(false)} width={640}>
-        <Form form={form} layout="vertical">
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="type" label="类型" rules={[{ required: true }]}><Select options={[{ value: 'rest', label: 'REST API' }, { value: 'graphql', label: 'GraphQL' }, { value: 'grpc', label: 'gRPC' }]} /></Form.Item>
-          <Form.Item name="base_url" label="Base URL" rules={[{ required: true }]}><Input placeholder="https://api.example.com" /></Form.Item>
-          <Form.Item name="auth_type" label="认证类型" rules={[{ required: true }]}><Select options={[{ value: 'none', label: '无认证' }, { value: 'bearer', label: 'Bearer Token' }, { value: 'api_key', label: 'API Key' }, { value: 'basic', label: 'Basic Auth' }, { value: 'oauth2', label: 'OAuth2' }]} /></Form.Item>
-          <Form.Item name="auth_config" label="认证配置 (JSON)"><TextArea rows={3} placeholder='{"token": "xxx"}' /></Form.Item>
-          <Form.Item name="openapi_spec" label="OpenAPI规范 (JSON/YAML)"><TextArea rows={6} placeholder="粘贴OpenAPI规范..." /></Form.Item>
+      <Table 
+        dataSource={connectors} 
+        columns={columns} 
+        rowKey="id" 
+        loading={loading}
+        size={isMobile ? 'small' : 'middle'}
+        scroll={isMobile ? { x: 400 } : undefined}
+      />
+      <Modal 
+        title={editing ? '编辑连接器' : '新建连接器'} 
+        open={modalOpen} 
+        onOk={onOk} 
+        onCancel={() => setModalOpen(false)}
+        width={isMobile ? '95%' : 600}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" initialValues={{ type: 'mcp', auth_type: 'none', transport_type: 'streamable_http', headers_kv: [{ key: '', value: '' }] }}>
+          {/* 基本信息 */}
+          <Form.Item name="name" label="连接器名称" rules={[{ required: true, message: '请输入名称' }]}>
+            <Input placeholder="如: GitHub MCP / 企业数据服务" />
+          </Form.Item>
+
+          <div style={{ display: 'flex', gap: 16 }}>
+            <Form.Item name="type" label="连接器类型" rules={[{ required: true }]} style={{ flex: 1 }}>
+              <Select options={[
+                { value: 'mcp', label: 'MCP 服务' },
+                { value: 'openapi', label: 'OpenAPI' },
+                { value: 'rest', label: 'REST API' },
+                { value: 'custom', label: '自定义' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="transport_type" label="MCP传输方式" style={{ flex: 1 }}>
+              <Select options={[
+                { value: 'streamable_http', label: 'StreamableHTTP (推荐)' },
+                { value: 'sse', label: 'SSE (旧版)' },
+              ]} />
+            </Form.Item>
+          </div>
+
+          <Form.Item name="base_url" label="基础URL" rules={[{ required: true, message: '请输入URL' }]}>
+            <Input placeholder="https://api.example.com" />
+          </Form.Item>
+
+          <Form.Item name="mcp_server_url" label="MCP Server地址" tooltip="填写MCP Server的端点地址，用于自动发现和导入MCP工具">
+            <Input placeholder="http://localhost:3000/mcp 或 /sse (可选)" />
+          </Form.Item>
+
+          <Divider style={{ margin: '12px 0 16px' }}>自定义HTTP头</Divider>
+
+          {/* 自定义头 KV 编辑器 */}
+          <Form.List name="headers_kv">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map(({ key, name, ...restField }) => (
+                  <div key={key} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                    <Form.Item {...restField} name={[name, 'key']} style={{ flex: 1, marginBottom: 0 }}>
+                      <Input placeholder="Header Name (如 X-Custom-Token)" />
+                    </Form.Item>
+                    <Form.Item {...restField} name={[name, 'value']} style={{ flex: 1, marginBottom: 0 }}>
+                      <Input placeholder="Header Value" />
+                    </Form.Item>
+                    {fields.length > 1 && (
+                      <MinusCircleOutlined onClick={() => remove(name)} style={{ color: '#999', cursor: 'pointer' }} />
+                    )}
+                  </div>
+                ))}
+                <Button type="dashed" onClick={() => add()} icon={<PlusCircleOutlined />} size="small" style={{ width: '100%' }}>
+                  添加自定义头
+                </Button>
+              </>
+            )}
+          </Form.List>
+
+          <Divider style={{ margin: '16px 0 16px' }}>认证配置</Divider>
+
+          <Form.Item name="auth_type" label="认证类型">
+            <Select options={[
+              { value: 'none', label: '无认证' },
+              { value: 'bearer', label: 'Bearer Token' },
+              { value: 'api_key', label: 'API Key' },
+              { value: 'basic', label: 'Basic Auth' },
+            ]} />
+          </Form.Item>
+
+          {authType && authType !== 'none' && (
+            <Form.Item name="auth_config_text" label="认证配置 (JSON)" tooltip='Bearer: {"token":"xxx"} | API Key: {"key":"xxx","header":"X-API-Key"} | Basic: {"username":"xxx","password":"xxx"}'>
+              <Input.TextArea rows={3} placeholder='{"token": "your-secret-token"}' style={{ fontFamily: 'monospace', fontSize: 13 }} />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>

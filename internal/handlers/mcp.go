@@ -402,6 +402,154 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 	})
 }
 
+// DiscoverMCPTools 从连接器的MCP Server发现工具
+func (h *MCPHandler) DiscoverMCPTools(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	connectorID := c.Param("connectorId")
+
+	// 获取连接器
+	var connector models.Connector
+	err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "连接器不存在"})
+		return
+	}
+
+	if connector.MCPServerURL == nil || *connector.MCPServerURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该连接器未配置MCP Server地址"})
+		return
+	}
+
+	// 调用MCP Client发现工具
+	client := mcp.GetDefaultClient()
+	ctx := c.Request.Context()
+	result, err := client.DiscoverTools(ctx, *connector.MCPServerURL, connector.TransportType, connector.AuthType, connector.AuthConfig, connector.Headers)
+	if err != nil {
+		log.Printf("MCP discover failed for connector %s: %v", connectorID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "MCP工具发现失败", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"server_info": result.ServerInfo,
+		"tools":       result.Tools,
+		"total":       len(result.Tools),
+	})
+}
+
+// ImportMCPToolsRequest 导入MCP工具请求
+type ImportMCPToolsRequest struct {
+	ToolNames []string `json:"tool_names"` // 要导入的工具名列表，空=全部导入
+}
+
+// ImportMCPTools 从MCP Server导入工具到EASP
+func (h *MCPHandler) ImportMCPTools(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	connectorID := c.Param("connectorId")
+
+	var req ImportMCPToolsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 获取连接器
+	var connector models.Connector
+	err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "连接器不存在"})
+		return
+	}
+
+	if connector.MCPServerURL == nil || *connector.MCPServerURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该连接器未配置MCP Server地址"})
+		return
+	}
+
+	// 发现工具
+	client := mcp.GetDefaultClient()
+	ctx := c.Request.Context()
+	result, err := client.DiscoverTools(ctx, *connector.MCPServerURL, connector.TransportType, connector.AuthType, connector.AuthConfig, connector.Headers)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "MCP工具发现失败", "details": err.Error()})
+		return
+	}
+
+	// 过滤要导入的工具
+	toolsToImport := result.Tools
+	if len(req.ToolNames) > 0 {
+		nameSet := make(map[string]bool)
+		for _, name := range req.ToolNames {
+			nameSet[name] = true
+		}
+		filtered := make([]mcp.DiscoveredTool, 0)
+		for _, tool := range result.Tools {
+			if nameSet[tool.Name] {
+				filtered = append(filtered, tool)
+			}
+		}
+		toolsToImport = filtered
+	}
+
+	// 导入工具
+	created := 0
+	updated := 0
+	for _, tool := range toolsToImport {
+		inputSchemaJSON, _ := json.Marshal(tool.InputSchema)
+		desc := tool.Description
+		method := "POST" // MCP工具默认POST
+		path := "/" + tool.Name
+
+		// 检查是否已存在
+		var existing models.MCPTool
+		err := database.DB.Get(&existing, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND connector_id = ? AND name = ?",
+			tenantID, connectorID, tool.Name)
+
+		if err != nil {
+			// 创建新工具
+			newTool := models.MCPTool{
+				ID:            uuid.New().String(),
+				TenantID:      tenantID,
+				ConnectorID:   connectorID,
+				Name:          tool.Name,
+				Description:   &desc,
+				InputSchema:   ptrString(string(inputSchemaJSON)),
+				BackendMethod: &method,
+				BackendPath:   &path,
+				RiskLevel:     "low",
+				Enabled:       true,
+			}
+			_, err = database.DB.NamedExec(`INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, enabled, created_at)
+				VALUES (:id, :tenant_id, :connector_id, :name, :description, :input_schema, :backend_method, :backend_path, :risk_level, :enabled, NOW())`, newTool)
+			if err == nil {
+				created++
+			} else {
+				log.Printf("Failed to import MCP tool %s: %v", tool.Name, err)
+			}
+		} else {
+			// 更新已有工具
+			_, err = database.DB.Exec(`UPDATE mcp_tools SET description = ?, input_schema = ? WHERE id = ?`,
+				desc, string(inputSchemaJSON), existing.ID)
+			if err == nil {
+				updated++
+			}
+		}
+	}
+
+	// 更新连接器工具数量
+	var totalTools int
+	database.DB.Get(&totalTools, "SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?", connectorID)
+	database.DB.Exec("UPDATE connectors SET tools_count = ?, last_sync_at = NOW() WHERE id = ?", totalTools, connectorID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "导入完成",
+		"total":        len(toolsToImport),
+		"created":      created,
+		"updated":      updated,
+		"server_info":  result.ServerInfo,
+	})
+}
+
 // ParseLimitOffset 解析分页参数
 func ParseLimitOffset(c *gin.Context, defaultLimit, maxLimit int) (int, int) {
 	limitStr := c.DefaultQuery("limit", strconv.Itoa(defaultLimit))

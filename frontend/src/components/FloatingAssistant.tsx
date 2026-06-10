@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Input, Button, Typography, Space, Avatar, Tag, Tooltip, Drawer, Badge } from 'antd';
+import { Input, Button, Typography, Space, Avatar, Tag, Tooltip, Badge } from 'antd';
 import {
-  SendOutlined, RobotOutlined, UserOutlined, ClearOutlined,
+  SendOutlined, RobotOutlined, UserOutlined, PlusOutlined,
   LoadingOutlined, CheckCircleOutlined, CloseOutlined,
   CustomerServiceOutlined,
 } from '@ant-design/icons';
@@ -26,9 +26,52 @@ interface DisplayMessage {
 
 interface FloatingAssistantProps {
   tenantId: string;
+  userId?: string;
 }
 
-const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
+// localStorage 工具函数
+const getChatKey = (userId: string, tenantId: string) =>
+  `easp_chat_${userId}_${tenantId}`;
+
+const loadMessages = (userId: string, tenantId: string): DisplayMessage[] => {
+  try {
+    const key = getChatKey(userId, tenantId);
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch { /* ignore */ }
+  return [];
+};
+
+const saveMessages = (userId: string, tenantId: string, messages: DisplayMessage[]) => {
+  try {
+    const key = getChatKey(userId, tenantId);
+    localStorage.setItem(key, JSON.stringify(messages));
+  } catch { /* ignore */ }
+};
+
+// 安全边界
+const BOUNDARY_MARGIN = 20;
+const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
+
+// 初始位置：右下角
+const getInitialPos = (): { x: number; y: number } => {
+  try {
+    const raw = localStorage.getItem('easp_fab_pos');
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (typeof p.x === 'number' && typeof p.y === 'number') {
+        return { x: clamp(p.x, BOUNDARY_MARGIN, window.innerWidth - 76), y: clamp(p.y, BOUNDARY_MARGIN, window.innerHeight - 76) };
+      }
+    }
+  } catch { /* ignore */ }
+  return { x: window.innerWidth - 80, y: window.innerHeight - 80 };
+};
+
+const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId }) => {
+  // —— 聊天状态 ——
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
@@ -38,6 +81,23 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // —— 拖拽状态 ——
+  const [pos, setPos] = useState(getInitialPos);
+  const [isDragging, setIsDragging] = useState(false);
+  const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
+  const startRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
+  const animRef = useRef<number | null>(null);
+
+  // 加载历史消息
+  useEffect(() => {
+    if (userId && tenantId) {
+      const saved = loadMessages(userId, tenantId);
+      if (saved.length > 0) setMessages(saved);
+    }
+  }, [userId, tenantId]);
+
+  // 自动滚动
   useEffect(() => {
     if (open) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -45,7 +105,136 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
     }
   }, [messages, open]);
 
-  // SSE 流式请求
+  // 保存消息（流式结束后）
+  useEffect(() => {
+    if (!userId || !tenantId) return;
+    if (sending) return; // 流式进行中不保存
+    if (messages.length === 0) return;
+    const hasStreaming = messages.some(m => m.isStreaming);
+    if (hasStreaming) return;
+    const clean = messages.filter(m => m.role !== 'status');
+    if (clean.length > 0) saveMessages(userId, tenantId, clean);
+  }, [messages, sending, userId, tenantId]);
+
+  // 保存按钮位置
+  useEffect(() => {
+    try { localStorage.setItem('easp_fab_pos', JSON.stringify(pos)); } catch { /* ignore */ }
+  }, [pos]);
+
+  // 窗口 resize 时修正位置
+  useEffect(() => {
+    const onResize = () => {
+      setPos(p => ({
+        x: clamp(p.x, BOUNDARY_MARGIN, window.innerWidth - 76),
+        y: clamp(p.y, BOUNDARY_MARGIN, window.innerHeight - 76),
+      }));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // 吸边动画
+  const snapToEdge = useCallback((x: number, y: number) => {
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+
+    const W = window.innerWidth, H = window.innerHeight;
+    const toLeft = x < W / 2;
+    const targetX = toLeft ? BOUNDARY_MARGIN : W - 76;
+    const targetY = clamp(y, BOUNDARY_MARGIN, H - 76);
+
+    let currentX = x, currentY = y;
+    const step = () => {
+      const dx = targetX - currentX, dy = targetY - currentY;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+        setPos({ x: targetX, y: targetY });
+        animRef.current = null;
+        return;
+      }
+      currentX += dx * 0.25;
+      currentY += dy * 0.25;
+      setPos({ x: Math.round(currentX), y: Math.round(currentY) });
+      animRef.current = requestAnimationFrame(step);
+    };
+    animRef.current = requestAnimationFrame(step);
+  }, []);
+
+  // —— 鼠标拖拽（PC）——
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const dx = e.clientX - startRef.current.x;
+      const dy = e.clientY - startRef.current.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragMovedRef.current = true;
+      const nx = clamp(startRef.current.posX + dx, BOUNDARY_MARGIN, window.innerWidth - 76);
+      const ny = clamp(startRef.current.posY + dy, BOUNDARY_MARGIN, window.innerHeight - 76);
+      setPos({ x: nx, y: ny });
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      setIsDragging(false);
+      if (dragMovedRef.current) {
+        e.preventDefault();
+        snapToEdge(e.clientX, e.clientY);
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [snapToEdge]);
+
+  // —— 触摸拖拽（移动端）——
+  useEffect(() => {
+    const onTouchMove = (e: TouchEvent) => {
+      if (!draggingRef.current) return;
+      e.preventDefault(); // 阻止页面滚动
+      const t = e.touches[0];
+      const dx = t.clientX - startRef.current.x;
+      const dy = t.clientY - startRef.current.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragMovedRef.current = true;
+      const nx = clamp(startRef.current.posX + dx, BOUNDARY_MARGIN, window.innerWidth - 76);
+      const ny = clamp(startRef.current.posY + dy, BOUNDARY_MARGIN, window.innerHeight - 76);
+      setPos({ x: nx, y: ny });
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      setIsDragging(false);
+      if (dragMovedRef.current) {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        snapToEdge(t.clientX, t.clientY);
+      }
+    };
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd);
+    return () => {
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [snapToEdge]);
+
+  // 清理动画帧
+  useEffect(() => () => { if (animRef.current) cancelAnimationFrame(animRef.current); }, []);
+
+  const onPointerDown = (e: React.MouseEvent | React.TouchEvent) => {
+    if (animRef.current) { cancelAnimationFrame(animRef.current); animRef.current = null; }
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    startRef.current = { x: clientX, y: clientY, posX: pos.x, posY: pos.y };
+    draggingRef.current = true;
+    dragMovedRef.current = false;
+    setIsDragging(true);
+  };
+
+  const onPointerClick = () => {
+    if (!dragMovedRef.current && !open) setOpen(true);
+  };
+
+  // —— SSE 流式请求 ——
   const onSend = useCallback(async () => {
     const text = input.trim();
     if (!text || sending) return;
@@ -117,10 +306,7 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
                 case 'status': {
                   setMessages(prev => {
                     const filtered = prev.filter(m => m.role !== 'status');
-                    return [...filtered, {
-                      role: 'status',
-                      content: data.message || '处理中...',
-                    }];
+                    return [...filtered, { role: 'status', content: data.message || '处理中...' }];
                   });
                   break;
                 }
@@ -128,10 +314,7 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
                 case 'tool':
                   setMessages(prev => {
                     const filtered = prev.filter(m => m.role !== 'status');
-                    return [...filtered, {
-                      role: 'status',
-                      content: `✓ ${data.name} 完成`,
-                    }];
+                    return [...filtered, { role: 'status', content: `✓ ${data.name} 完成` }];
                   });
                   break;
 
@@ -199,166 +382,215 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId }) => {
     }
   }, [input, sending, messages, tenantId, open]);
 
-  const onClear = () => {
+  // 开启新对话
+  const onNewChat = useCallback(() => {
     abortControllerRef.current?.abort();
     setMessages([]);
     setSending(false);
     setCurrentModel(null);
-  };
+    setUnread(0);
+    if (userId && tenantId) {
+      try { localStorage.removeItem(getChatKey(userId, tenantId)); } catch { /* ignore */ }
+    }
+  }, [userId, tenantId]);
 
   return (
     <>
-      {/* 浮动按钮 */}
-      <Badge count={unread} size="small" offset={[-4, 4]}>
+      {/* 浮动按钮 — 面板打开时隐藏 */}
+      {!open && (
+      <Badge count={unread} size="small" offset={[-6, 0]}>
         <div
-          onClick={() => setOpen(true)}
+          onMouseDown={onPointerDown}
+          onTouchStart={onPointerDown}
+          onClick={onPointerClick}
           style={{
-            position: 'fixed', right: 24, bottom: 24, zIndex: 1000,
+            position: 'fixed',
+            left: pos.x,
+            top: pos.y,
+            zIndex: 1000,
             width: 56, height: 56, borderRadius: '50%',
             background: 'linear-gradient(135deg, #1677ff, #4096ff)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', boxShadow: '0 4px 16px rgba(22,119,255,0.4)',
-            transition: 'all 0.3s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'scale(1.1)';
-            e.currentTarget.style.boxShadow = '0 6px 24px rgba(22,119,255,0.5)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'scale(1)';
-            e.currentTarget.style.boxShadow = '0 4px 16px rgba(22,119,255,0.4)';
+            cursor: isDragging ? 'grabbing' : 'grab',
+            boxShadow: isDragging
+              ? '0 8px 32px rgba(22,119,255,0.5)'
+              : '0 4px 16px rgba(22,119,255,0.4)',
+            transition: isDragging ? 'none' : 'box-shadow 0.3s',
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
           }}
         >
-          <CustomerServiceOutlined style={{ fontSize: 26, color: '#fff' }} />
+          <CustomerServiceOutlined style={{ fontSize: 26, color: '#fff', pointerEvents: 'none' }} />
         </div>
       </Badge>
+      )}
 
-      {/* 聊天抽屉 */}
-      <Drawer
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <RobotOutlined style={{ color: '#1677ff' }} />
-            <span>AI 助手</span>
-            {currentModel && (
-              <Tooltip title={`${currentModel.model} | ${currentModel.provider}`}>
-                <Tag color="blue" style={{ fontSize: 11, cursor: 'pointer', margin: 0 }}>
-                  {currentModel.display_name || currentModel.model}
-                </Tag>
-              </Tooltip>
-            )}
-            {sending && <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, fontSize: 11 }}>思考中</Tag>}
-          </div>
-        }
-        placement="right"
-        width={420}
-        open={open}
-        onClose={() => setOpen(false)}
-        closeIcon={<CloseOutlined />}
-        styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: 'calc(100vh - 55px)' } }}
-        extra={
-          <Button icon={<ClearOutlined />} size="small" onClick={onClear} disabled={messages.length === 0}>
-            清空
-          </Button>
-        }
-      >
-        {/* 消息区域 */}
-        <div style={{ flex: 1, overflow: 'auto', padding: 16, background: '#f8f9fa' }}>
-          {messages.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-              <RobotOutlined style={{ fontSize: 48, color: '#d9d9d9', marginBottom: 16 }} />
-              <div><Text type="secondary">你好！我是 EASP 智能助手</Text></div>
-              <div style={{ marginTop: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>输入你的需求开始对话</Text></div>
+      {/* 聊天弹窗 */}
+      {open && (
+        <div style={{
+          position: 'fixed',
+          right: 0, top: 0,
+          width: 'min(420px, 100vw)',
+          height: '100vh',
+          zIndex: 1001,
+          background: '#fff',
+          boxShadow: '-4px 0 24px rgba(0,0,0,0.12)',
+          display: 'flex', flexDirection: 'column',
+          animation: 'easp-slide-in 0.25s ease-out',
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '12px 16px', borderBottom: '1px solid #f0f0f0',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#fff', flexShrink: 0,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <RobotOutlined style={{ color: '#1677ff' }} />
+              <span style={{ fontWeight: 600 }}>AI 助手</span>
+              {currentModel && (
+                <Tooltip title={`${currentModel.model} | ${currentModel.provider}`}>
+                  <Tag color="blue" style={{ fontSize: 11, cursor: 'pointer', margin: 0 }}>
+                    {currentModel.display_name || currentModel.model}
+                  </Tag>
+                </Tooltip>
+              )}
+              {sending && <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, fontSize: 11 }}>思考中</Tag>}
             </div>
-          ) : (
-            <div>
-              {messages.map((msg, index) => (
-                <div
-                  key={index}
-                  style={{
-                    display: 'flex',
-                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                    marginBottom: 12,
-                  }}
-                >
-                  {msg.role !== 'user' && (
-                    <Avatar
-                      icon={msg.role === 'status' ? <LoadingOutlined /> : <RobotOutlined />}
-                      size={28}
-                      style={{
-                        backgroundColor: msg.role === 'status' ? '#faad14' : '#1677ff',
-                        marginRight: 8, flexShrink: 0,
-                      }}
-                    />
-                  )}
-                  <div style={{
-                    maxWidth: '80%', padding: '8px 12px', borderRadius: 12,
-                    background: msg.role === 'user' ? '#1677ff' : msg.role === 'status' ? '#fffbe6' : '#fff',
-                    color: msg.role === 'user' ? '#fff' : '#333',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                    border: msg.role === 'status' ? '1px solid #ffe58f' : 'none',
-                    fontSize: 13,
-                  }}>
-                    {msg.role === 'status' ? (
-                      <Space size={6}>
-                        <LoadingOutlined style={{ color: '#faad14', fontSize: 12 }} />
-                        <Text style={{ color: '#8c6e00', fontSize: 12 }}>{msg.content}</Text>
-                      </Space>
-                    ) : msg.role === 'assistant' ? (
-                      <>
-                        <MarkdownRenderer content={msg.content} compact />
-                        {msg.isStreaming && <span style={{ color: '#1677ff', fontWeight: 'bold', animation: 'blink 0.8s infinite' }}>▊</span>}
-                        {!msg.isStreaming && msg.totalMs !== undefined && (
-                          <div style={{ marginTop: 4, fontSize: 11, color: '#999', fontFamily: 'monospace' }}>
-                            {msg.totalMs < 1000 ? `${msg.totalMs}ms` : `${(msg.totalMs / 1000).toFixed(1)}s`}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+            <Space size={4}>
+              <Tooltip title="新对话">
+                <Button
+                  type="text"
+                  icon={<PlusOutlined />}
+                  size="small"
+                  onClick={onNewChat}
+                  disabled={messages.length === 0 && !sending}
+                />
+              </Tooltip>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                size="small"
+                onClick={() => setOpen(false)}
+              />
+            </Space>
+          </div>
+
+          {/* 消息区域 */}
+          <div style={{ flex: 1, overflow: 'auto', padding: 16, background: '#f8f9fa' }}>
+            {messages.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+                <RobotOutlined style={{ fontSize: 48, color: '#d9d9d9', marginBottom: 16 }} />
+                <div><Text type="secondary">你好！我是 EASP 智能助手</Text></div>
+                <div style={{ marginTop: 8 }}><Text type="secondary" style={{ fontSize: 12 }}>输入你的需求开始对话</Text></div>
+              </div>
+            ) : (
+              <div>
+                {messages.map((msg, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      display: 'flex',
+                      justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                      marginBottom: 12,
+                    }}
+                  >
+                    {msg.role !== 'user' && (
+                      <Avatar
+                        icon={msg.role === 'status' ? <LoadingOutlined /> : <RobotOutlined />}
+                        size={28}
+                        style={{
+                          backgroundColor: msg.role === 'status' ? '#faad14' : '#1677ff',
+                          marginRight: 8, flexShrink: 0,
+                        }}
+                      />
+                    )}
+                    <div style={{
+                      maxWidth: '80%', padding: '8px 12px', borderRadius: 12,
+                      background: msg.role === 'user' ? '#1677ff' : msg.role === 'status' ? '#fffbe6' : '#fff',
+                      color: msg.role === 'user' ? '#fff' : '#333',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                      border: msg.role === 'status' ? '1px solid #ffe58f' : 'none',
+                      fontSize: 13,
+                    }}>
+                      {msg.role === 'status' ? (
+                        <Space size={6}>
+                          <LoadingOutlined style={{ color: '#faad14', fontSize: 12 }} />
+                          <Text style={{ color: '#8c6e00', fontSize: 12 }}>{msg.content}</Text>
+                        </Space>
+                      ) : msg.role === 'assistant' ? (
+                        <>
+                          <MarkdownRenderer content={msg.content} compact />
+                          {msg.isStreaming && <span style={{ color: '#1677ff', fontWeight: 'bold', animation: 'blink 0.8s infinite' }}>▊</span>}
+                          {!msg.isStreaming && msg.totalMs !== undefined && (
+                            <div style={{ marginTop: 4, fontSize: 11, color: '#999', fontFamily: 'monospace' }}>
+                              {msg.totalMs < 1000 ? `${msg.totalMs}ms` : `${(msg.totalMs / 1000).toFixed(1)}s`}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                      )}
+                    </div>
+                    {msg.role === 'user' && (
+                      <Avatar icon={<UserOutlined />} size={28} style={{ backgroundColor: '#87d068', marginLeft: 8, flexShrink: 0 }} />
+                    )}
+                    {msg.role === 'assistant' && !msg.isStreaming && msg.content && (
+                      <CheckCircleOutlined style={{ color: '#52c41a', marginLeft: 6, alignSelf: 'center', fontSize: 12 }} />
                     )}
                   </div>
-                  {msg.role === 'user' && (
-                    <Avatar icon={<UserOutlined />} size={28} style={{ backgroundColor: '#87d068', marginLeft: 8, flexShrink: 0 }} />
-                  )}
-                  {msg.role === 'assistant' && !msg.isStreaming && msg.content && (
-                    <CheckCircleOutlined style={{ color: '#52c41a', marginLeft: 6, alignSelf: 'center', fontSize: 12 }} />
-                  )}
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
 
-        {/* 输入区域 */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', background: '#fff' }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <TextArea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="输入你的需求..."
-              autoSize={{ minRows: 1, maxRows: 3 }}
-              onPressEnter={(e) => {
-                if (!e.shiftKey) { e.preventDefault(); onSend(); }
-              }}
-              disabled={sending}
-              style={{ flex: 1 }}
-            />
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={onSend}
-              loading={sending}
-              style={{ height: 'auto' }}
-            />
+          {/* 输入区域 */}
+          <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', background: '#fff', flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <TextArea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="输入你的需求..."
+                autoSize={{ minRows: 1, maxRows: 3 }}
+                onPressEnter={(e) => {
+                  if (!e.shiftKey) { e.preventDefault(); onSend(); }
+                }}
+                disabled={sending}
+                style={{ flex: 1 }}
+              />
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={onSend}
+                loading={sending}
+                style={{ height: 'auto' }}
+              />
+            </div>
           </div>
         </div>
-      </Drawer>
+      )}
+
+      {/* 遮罩层 */}
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.15)',
+            zIndex: 1000,
+          }}
+        />
+      )}
 
       <style>{`
         @keyframes blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        @keyframes easp-slide-in {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
         }
         ${MARKDOWN_CSS}
       `}</style>

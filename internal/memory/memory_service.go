@@ -71,6 +71,19 @@ func (s *MemoryService) SaveUserMemory(tenantID, userID, memType, content string
 	return memory, nil
 }
 
+// ListAllUserMemories 列出租户下所有用户记忆
+func (s *MemoryService) ListAllUserMemories(tenantID string, limit int) ([]models.UserMemory, error) {
+	var memories []models.UserMemory
+	err := database.DB.Select(&memories,
+		`SELECT id, tenant_id, user_id, type, content, COALESCE(entity_ids, '[]') as entity_ids,
+		 COALESCE(metadata, '{}') as metadata, access_count, last_accessed_at, created_at, updated_at
+		 FROM user_memories WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user memories: %w", err)
+	}
+	return memories, nil
+}
+
 // GetUserMemories 获取用户记忆
 func (s *MemoryService) GetUserMemories(tenantID, userID string, memType string, limit int) ([]models.UserMemory, error) {
 	var memories []models.UserMemory
@@ -237,6 +250,18 @@ func (s *MemoryService) SaveEntity(tenantID, name, entityType, refID string, met
 	return entity, nil
 }
 
+// ListEntities 列出实体
+func (s *MemoryService) ListEntities(tenantID string, limit int) ([]models.Entity, error) {
+	var entities []models.Entity
+	err := database.DB.Select(&entities,
+		`SELECT id, tenant_id, name, type, ref_id, metadata, created_at, updated_at
+		 FROM entities WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list entities: %w", err)
+	}
+	return entities, nil
+}
+
 // SearchEntities 搜索实体
 func (s *MemoryService) SearchEntities(tenantID, query string, limit int) ([]models.Entity, error) {
 	keywords := extractKeywords(query)
@@ -340,6 +365,18 @@ func (s *MemoryService) SaveSkillMemory(tenantID, userID, name, description, con
 	}
 
 	return memory, nil
+}
+
+// ListSkillMemories 列出技能记忆
+func (s *MemoryService) ListSkillMemories(tenantID string, limit int) ([]models.SkillMemory, error) {
+	var memories []models.SkillMemory
+	err := database.DB.Select(&memories,
+		`SELECT id, tenant_id, user_id, name, description, content, category, tags, usage_count, created_at, updated_at
+		 FROM skill_memories WHERE tenant_id = ? ORDER BY usage_count DESC, created_at DESC LIMIT ?`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list skill memories: %w", err)
+	}
+	return memories, nil
 }
 
 // SearchSkillMemories 搜索技能记忆

@@ -6,6 +6,8 @@ export interface Role {
   name: string;
   description?: string;
   tools?: string;
+  allowed_mcp_tools?: string;
+  allowed_skills?: string;
   rate_limit?: string;
   data_scope?: string;
   is_system?: boolean;

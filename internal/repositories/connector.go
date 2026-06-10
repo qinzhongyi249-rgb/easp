@@ -20,8 +20,8 @@ func (r *ConnectorRepository) Create(connector *models.Connector) error {
 	connector.CreatedAt = time.Now()
 	connector.UpdatedAt = time.Now()
 	
-	query := `INSERT INTO connectors (id, tenant_id, name, type, base_url, auth_type, auth_config, spec_url, spec_content, status, tools_count, last_sync_at, created_at, updated_at) 
-			  VALUES (:id, :tenant_id, :name, :type, :base_url, :auth_type, :auth_config, :spec_url, :spec_content, :status, :tools_count, :last_sync_at, :created_at, :updated_at)`
+	query := `INSERT INTO connectors (id, tenant_id, name, type, base_url, transport_type, mcp_server_url, headers, auth_type, auth_config, spec_url, spec_content, status, tools_count, last_sync_at, created_at, updated_at) 
+			  VALUES (:id, :tenant_id, :name, :type, :base_url, :transport_type, :mcp_server_url, :headers, :auth_type, :auth_config, :spec_url, :spec_content, :status, :tools_count, :last_sync_at, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, connector)
 	return err
 }
@@ -43,7 +43,7 @@ func (r *ConnectorRepository) ListByTenant(tenantID string) ([]models.Connector,
 
 func (r *ConnectorRepository) Update(connector *models.Connector) error {
 	connector.UpdatedAt = time.Now()
-	query := `UPDATE connectors SET name=:name, type=:type, base_url=:base_url, auth_type=:auth_type, auth_config=:auth_config, 
+	query := `UPDATE connectors SET name=:name, type=:type, base_url=:base_url, transport_type=:transport_type, mcp_server_url=:mcp_server_url, headers=:headers, auth_type=:auth_type, auth_config=:auth_config, 
 			  spec_url=:spec_url, spec_content=:spec_content, status=:status, tools_count=:tools_count, last_sync_at=:last_sync_at, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, connector)
 	return err

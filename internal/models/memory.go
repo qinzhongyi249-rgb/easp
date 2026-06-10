@@ -10,6 +10,7 @@ type UserMemory struct {
 	ID             string          `json:"id" db:"id"`
 	TenantID       string          `json:"tenant_id" db:"tenant_id"`
 	UserID         string          `json:"user_id" db:"user_id"`
+	PoolID         *string         `json:"pool_id" db:"pool_id"` // 所属记忆池
 	Type           string          `json:"type" db:"type"` // preference/fact/feedback
 	Content        string          `json:"content" db:"content"`
 	Embedding      []byte          `json:"-" db:"embedding"`
@@ -39,6 +40,7 @@ type SessionMemory struct {
 type Entity struct {
 	ID        string          `json:"id" db:"id"`
 	TenantID  string          `json:"tenant_id" db:"tenant_id"`
+	PoolID    *string         `json:"pool_id" db:"pool_id"` // 所属记忆池
 	Name      string          `json:"name" db:"name"`
 	Type      string          `json:"type" db:"type"` // tenant/user/connector/tool/skill
 	RefID     *string         `json:"ref_id" db:"ref_id"`
@@ -64,6 +66,7 @@ type SkillMemory struct {
 	ID          string          `json:"id" db:"id"`
 	TenantID    string          `json:"tenant_id" db:"tenant_id"`
 	UserID      *string         `json:"user_id" db:"user_id"`
+	PoolID      *string         `json:"pool_id" db:"pool_id"` // 所属记忆池
 	Name        string          `json:"name" db:"name"`
 	Description *string         `json:"description" db:"description"`
 	Content     string          `json:"content" db:"content"`
