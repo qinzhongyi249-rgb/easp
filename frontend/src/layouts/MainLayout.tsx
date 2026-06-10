@@ -88,6 +88,7 @@ const MainLayout: React.FC = () => {
     ...(hasTool('sso-config') ? [{ key: '/sso-config', icon: <KeyOutlined />, label: 'SSO配置' }] : []),
     { key: '/assistant', icon: <RobotOutlined />, label: 'AI 助手' },
     ...(hasTool('audit-logs') ? [{ key: '/audit-logs', icon: <FileTextOutlined />, label: '审计日志' }] : []),
+    ...(hasTool('api-keys') ? [{ key: '/api-keys', icon: <KeyOutlined />, label: 'API Key' }] : []),
   ];
 
   const userMenuItems = [

@@ -264,6 +264,45 @@ func AutoMigrate() error {
 		`ALTER TABLE tenants ADD COLUMN monthly_quota INT NOT NULL DEFAULT 0 COMMENT '每月API调用上限，0=不限' AFTER daily_quota`,
 		`ALTER TABLE tenants ADD COLUMN daily_token_quota INT NOT NULL DEFAULT 0 COMMENT '每日token消耗上限，0=不限' AFTER monthly_quota`,
 		`ALTER TABLE tenants ADD COLUMN monthly_token_quota INT NOT NULL DEFAULT 0 COMMENT '每月token消耗上限，0=不限' AFTER daily_token_quota`,
+		// ========== API Key ==========
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id VARCHAR(36) PRIMARY KEY,
+			tenant_id VARCHAR(36) NOT NULL,
+			name VARCHAR(100) NOT NULL,
+			key_prefix VARCHAR(16) NOT NULL COMMENT 'Key前缀，用于显示',
+			key_hash VARCHAR(255) NOT NULL COMMENT 'bcrypt hash',
+			scopes JSON COMMENT '权限范围: ["chat","sessions"]',
+			enabled TINYINT(1) NOT NULL DEFAULT 1,
+			expires_at DATETIME NULL,
+			last_used_at DATETIME NULL,
+			usage_count BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_tenant_id (tenant_id),
+			UNIQUE INDEX idx_key_prefix (key_prefix)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS embed_sessions (
+			id VARCHAR(36) PRIMARY KEY,
+			tenant_id VARCHAR(36) NOT NULL,
+			api_key_id VARCHAR(36) NOT NULL,
+			visitor_id VARCHAR(100) NOT NULL COMMENT '外部访客ID',
+			metadata JSON COMMENT '业务上下文',
+			message_count INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			INDEX idx_tenant_id (tenant_id),
+			INDEX idx_api_key_id (api_key_id),
+			INDEX idx_visitor (tenant_id, visitor_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS embed_messages (
+			id VARCHAR(36) PRIMARY KEY,
+			session_id VARCHAR(36) NOT NULL,
+			role VARCHAR(20) NOT NULL COMMENT 'user/assistant/system',
+			content TEXT NOT NULL,
+			metadata JSON COMMENT '工具调用等扩展信息',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_session_id (session_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
 	for _, alter := range alters {

@@ -257,3 +257,41 @@ type SSOProvider struct {
 	CreatedAt   time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
+
+// APIKey API密钥
+type APIKey struct {
+	ID          string     `db:"id" json:"id"`
+	TenantID    string     `db:"tenant_id" json:"tenant_id"`
+	Name        string     `db:"name" json:"name"`
+	KeyPrefix   string     `db:"key_prefix" json:"key_prefix"`     // 前8字符，用于显示
+	KeyHash     string     `db:"key_hash" json:"-"`                 // bcrypt hash，不返回给前端
+	Scopes      *string    `db:"scopes" json:"scopes,omitempty"`    // JSON数组：["chat","sessions"]
+	Enabled     bool       `db:"enabled" json:"enabled"`
+	ExpiresAt   *time.Time `db:"expires_at" json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
+	UsageCount  int64      `db:"usage_count" json:"usage_count"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// EmbedSession Embed API 会话
+type EmbedSession struct {
+	ID          string    `db:"id" json:"id"`
+	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+	APIKeyID    string    `db:"api_key_id" json:"api_key_id"`
+	VisitorID   string    `db:"visitor_id" json:"visitor_id"`     // 外部访客ID
+	Metadata    *string   `db:"metadata" json:"metadata,omitempty"` // JSON: 业务上下文
+	MessageCount int      `db:"message_count" json:"message_count"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+}
+
+// EmbedMessage Embed API 消息
+type EmbedMessage struct {
+	ID        string    `db:"id" json:"id"`
+	SessionID string    `db:"session_id" json:"session_id"`
+	Role      string    `db:"role" json:"role"` // user/assistant/system
+	Content   string    `db:"content" json:"content"`
+	Metadata  *string   `db:"metadata" json:"metadata,omitempty"` // JSON: 工具调用等
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}

@@ -15,6 +15,7 @@ import Skills from './pages/Skills';
 import Memory from './pages/Memory';
 import ModelConfig from './pages/ModelConfig';
 import AuditLogs from './pages/AuditLogs';
+import APIKeys from './pages/APIKeys';
 import SSOConfig from './pages/SSOConfig';
 import Assistant from './pages/Assistant';
 
@@ -44,6 +45,7 @@ const AppRoutes = () => {
         <Route path="memory" element={<Memory />} />
         <Route path="model-config" element={<ModelConfig />} />
         <Route path="audit-logs" element={<AuditLogs />} />
+        <Route path="api-keys" element={<APIKeys />} />
         <Route path="sso-config" element={<SSOConfig />} />
         <Route path="assistant" element={<Assistant />} />
       </Route>
