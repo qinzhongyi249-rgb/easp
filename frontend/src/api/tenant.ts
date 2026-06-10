@@ -8,6 +8,11 @@ export interface Tenant {
   plan: string;
   expires_at: string | null;
   max_users: number;
+  rate_limit: number;
+  daily_quota: number;
+  monthly_quota: number;
+  daily_token_quota: number;
+  monthly_token_quota: number;
   created_at: string;
   updated_at: string;
 }

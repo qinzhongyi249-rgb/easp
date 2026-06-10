@@ -6,14 +6,46 @@ import (
 
 // Tenant 租户模型
 type Tenant struct {
-	ID        string     `db:"id" json:"id"`
-	Name      string     `db:"name" json:"name"`
-	Plan      string     `db:"plan" json:"plan"`
-	Status    string     `db:"status" json:"status"`
-	ExpiresAt *time.Time `db:"expires_at" json:"expires_at,omitempty"`
-	MaxUsers  int        `db:"max_users" json:"max_users"`
-	CreatedAt time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time  `db:"updated_at" json:"updated_at"`
+	ID                string     `db:"id" json:"id"`
+	Name              string     `db:"name" json:"name"`
+	Plan              string     `db:"plan" json:"plan"`
+	Status            string     `db:"status" json:"status"`
+	ExpiresAt         *time.Time `db:"expires_at" json:"expires_at,omitempty"`
+	MaxUsers          int        `db:"max_users" json:"max_users"`
+	RateLimit         int        `db:"rate_limit" json:"rate_limit"`                       // 每分钟最大请求数，0=不限
+	DailyQuota        int        `db:"daily_quota" json:"daily_quota"`                     // 每日API调用上限，0=不限
+	MonthlyQuota      int        `db:"monthly_quota" json:"monthly_quota"`                 // 每月API调用上限，0=不限
+	DailyTokenQuota   int        `db:"daily_token_quota" json:"daily_token_quota"`         // 每日token消耗上限，0=不限
+	MonthlyTokenQuota int        `db:"monthly_token_quota" json:"monthly_token_quota"`     // 每月token消耗上限，0=不限
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// ApiUsage API调用记录
+type ApiUsage struct {
+	ID         int64      `db:"id" json:"id"`
+	TenantID   string     `db:"tenant_id" json:"tenant_id"`
+	UserID     string     `db:"user_id" json:"user_id"`
+	Endpoint   string     `db:"endpoint" json:"endpoint"`
+	Method     string     `db:"method" json:"method"`
+	StatusCode int        `db:"status_code" json:"status_code"`
+	LatencyMs  int        `db:"latency_ms" json:"latency_ms"`
+	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
+}
+
+// ModelUsage 模型调用记录（含token消耗）
+type ModelUsage struct {
+	ID             int64      `db:"id" json:"id"`
+	TenantID       string     `db:"tenant_id" json:"tenant_id"`
+	UserID         string     `db:"user_id" json:"user_id"`
+	ModelProvider  string     `db:"model_provider" json:"model_provider"`
+	ModelName      string     `db:"model_name" json:"model_name"`
+	InputTokens    int        `db:"input_tokens" json:"input_tokens"`
+	OutputTokens   int        `db:"output_tokens" json:"output_tokens"`
+	TotalTokens    int        `db:"total_tokens" json:"total_tokens"`
+	LatencyMs      int        `db:"latency_ms" json:"latency_ms"`
+	Endpoint       string     `db:"endpoint" json:"endpoint"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
 }
 
 // TenantSSOConfig 租户SSO配置

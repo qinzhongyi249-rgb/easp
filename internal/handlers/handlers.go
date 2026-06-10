@@ -162,11 +162,16 @@ func (h *TenantHandler) Update(c *gin.Context) {
 
 	// 绑定更新字段
 	var req struct {
-		Name      string  `json:"name"`
-		Plan      string  `json:"plan"`
-		Status    string  `json:"status"`
-		ExpiresAt *string `json:"expires_at"` // 字符串，空串=永久有效
-		MaxUsers  *int    `json:"max_users"`
+		Name              string  `json:"name"`
+		Plan              string  `json:"plan"`
+		Status            string  `json:"status"`
+		ExpiresAt         *string `json:"expires_at"` // 字符串，空串=永久有效
+		MaxUsers          *int    `json:"max_users"`
+		RateLimit         *int    `json:"rate_limit"`
+		DailyQuota        *int    `json:"daily_quota"`
+		MonthlyQuota      *int    `json:"monthly_quota"`
+		DailyTokenQuota   *int    `json:"daily_token_quota"`
+		MonthlyTokenQuota *int    `json:"monthly_token_quota"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -200,6 +205,21 @@ func (h *TenantHandler) Update(c *gin.Context) {
 	}
 	if req.MaxUsers != nil {
 		tenant.MaxUsers = *req.MaxUsers
+	}
+	if req.RateLimit != nil {
+		tenant.RateLimit = *req.RateLimit
+	}
+	if req.DailyQuota != nil {
+		tenant.DailyQuota = *req.DailyQuota
+	}
+	if req.MonthlyQuota != nil {
+		tenant.MonthlyQuota = *req.MonthlyQuota
+	}
+	if req.DailyTokenQuota != nil {
+		tenant.DailyTokenQuota = *req.DailyTokenQuota
+	}
+	if req.MonthlyTokenQuota != nil {
+		tenant.MonthlyTokenQuota = *req.MonthlyTokenQuota
 	}
 
 	if err := h.repo.Update(tenant); err != nil {

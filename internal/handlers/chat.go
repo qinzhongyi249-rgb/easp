@@ -1815,6 +1815,14 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 			return
 		}
 
+		// 记录模型 token 消耗
+		if response.InputTokens > 0 || response.OutputTokens > 0 {
+			uid := ""
+			if userID != nil { uid = userID.(string) }
+			RecordModelUsage(tid, uid, response.Provider, response.Model,
+				"/chat", response.InputTokens, response.OutputTokens, int(modelElapsed))
+		}
+
 		// 检查是否有工具调用
 		if len(response.ToolCalls) > 0 {
 			// 记录模型调用了哪些工具
@@ -1998,8 +2006,12 @@ func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservi
 
 // ModelResponse 模型响应
 type ModelResponse struct {
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls"`
+	Content      string     `json:"content"`
+	ToolCalls    []ToolCall `json:"tool_calls"`
+	InputTokens  int        `json:"input_tokens"`
+	OutputTokens int        `json:"output_tokens"`
+	Provider     string     `json:"provider"`
+	Model        string     `json:"model"`
 }
 
 // callModelWithTools 调用模型（支持工具，非流式，带重试）
@@ -2055,6 +2067,11 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 					ToolCalls []ToolCall `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
@@ -2070,8 +2087,12 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 		}
 
 		return &ModelResponse{
-			Content:   chatResp.Choices[0].Message.Content,
-			ToolCalls: chatResp.Choices[0].Message.ToolCalls,
+			Content:      chatResp.Choices[0].Message.Content,
+			ToolCalls:    chatResp.Choices[0].Message.ToolCalls,
+			InputTokens:  chatResp.Usage.PromptTokens,
+			OutputTokens: chatResp.Usage.CompletionTokens,
+			Provider:     config.ProviderName,
+			Model:        config.Model,
 		}, nil
 	}
 

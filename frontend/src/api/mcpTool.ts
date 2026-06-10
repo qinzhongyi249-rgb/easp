@@ -9,6 +9,7 @@ export interface MCPTool {
   method: string;
   path: string;
   parameters?: string;
+  input_schema?: string;
   enabled: boolean;
   created_at: string;
   updated_at: string;

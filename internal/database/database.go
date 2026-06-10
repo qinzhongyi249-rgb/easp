@@ -187,6 +187,33 @@ func AutoMigrate() error {
 			INDEX idx_tenant_id (tenant_id),
 			INDEX idx_category (category)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS api_usage (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			tenant_id VARCHAR(36) NOT NULL,
+			user_id VARCHAR(36) NOT NULL DEFAULT '',
+			endpoint VARCHAR(255) NOT NULL,
+			method VARCHAR(10) NOT NULL,
+			status_code INT NOT NULL DEFAULT 0,
+			latency_ms INT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_tenant_date (tenant_id, created_at),
+			INDEX idx_created_at (created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS model_usage (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			tenant_id VARCHAR(36) NOT NULL,
+			user_id VARCHAR(36) NOT NULL DEFAULT '',
+			model_provider VARCHAR(100) NOT NULL DEFAULT '',
+			model_name VARCHAR(100) NOT NULL,
+			input_tokens INT NOT NULL DEFAULT 0,
+			output_tokens INT NOT NULL DEFAULT 0,
+			total_tokens INT NOT NULL DEFAULT 0,
+			latency_ms INT NOT NULL DEFAULT 0,
+			endpoint VARCHAR(255) NOT NULL DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_tenant_date (tenant_id, created_at),
+			INDEX idx_model (model_provider, model_name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
 	for _, migration := range migrations {
@@ -231,6 +258,12 @@ func AutoMigrate() error {
 		// roles 表新增 MCP工具和技能权限字段
 		`ALTER TABLE roles ADD COLUMN allowed_mcp_tools TEXT NULL DEFAULT NULL COMMENT '允许使用的MCP工具ID JSON数组' AFTER tools`,
 		`ALTER TABLE roles ADD COLUMN allowed_skills TEXT NULL DEFAULT NULL COMMENT '允许使用的技能ID JSON数组' AFTER allowed_mcp_tools`,
+		// ========== 限流配额 ==========
+		`ALTER TABLE tenants ADD COLUMN rate_limit INT NOT NULL DEFAULT 0 COMMENT '每分钟最大请求数，0=不限' AFTER max_users`,
+		`ALTER TABLE tenants ADD COLUMN daily_quota INT NOT NULL DEFAULT 0 COMMENT '每日API调用上限，0=不限' AFTER rate_limit`,
+		`ALTER TABLE tenants ADD COLUMN monthly_quota INT NOT NULL DEFAULT 0 COMMENT '每月API调用上限，0=不限' AFTER daily_quota`,
+		`ALTER TABLE tenants ADD COLUMN daily_token_quota INT NOT NULL DEFAULT 0 COMMENT '每日token消耗上限，0=不限' AFTER monthly_quota`,
+		`ALTER TABLE tenants ADD COLUMN monthly_token_quota INT NOT NULL DEFAULT 0 COMMENT '每月token消耗上限，0=不限' AFTER daily_token_quota`,
 	}
 
 	for _, alter := range alters {

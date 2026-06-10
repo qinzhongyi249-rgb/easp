@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Button, Select, Input, Space, Card, Typography, Tooltip, Tag, Collapse, App } from 'antd';
+import { Button, Select, Input, Space, Card, Typography, Tooltip, Tag } from 'antd';
 import { PlusOutlined, DeleteOutlined, ArrowUpOutlined, ArrowDownOutlined, ToolOutlined, BranchesOutlined, CodeOutlined, ApiOutlined } from '@ant-design/icons';
 import { mcpToolApi } from '../api/mcpTool';
 import type { MCPTool } from '../api/mcpTool';
@@ -22,7 +22,6 @@ const STEP_TYPE_OPTIONS = [
 ];
 
 const StepEditor: React.FC<StepEditorProps> = ({ value, onChange, tenantId }) => {
-  const { message } = App.useApp();
   const [steps, setSteps] = useState<SkillStep[]>([]);
   const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);

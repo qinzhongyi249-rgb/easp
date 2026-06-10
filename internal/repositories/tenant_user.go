@@ -43,7 +43,7 @@ func (r *TenantRepository) List() ([]models.Tenant, error) {
 
 func (r *TenantRepository) Update(tenant *models.Tenant) error {
 	tenant.UpdatedAt = time.Now()
-	query := `UPDATE tenants SET name=:name, plan=:plan, status=:status, expires_at=:expires_at, max_users=:max_users, updated_at=:updated_at WHERE id=:id`
+	query := `UPDATE tenants SET name=:name, plan=:plan, status=:status, expires_at=:expires_at, max_users=:max_users, rate_limit=:rate_limit, daily_quota=:daily_quota, monthly_quota=:monthly_quota, daily_token_quota=:daily_token_quota, monthly_token_quota=:monthly_token_quota, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, tenant)
 	return err
 }
