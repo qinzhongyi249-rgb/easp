@@ -2067,11 +2067,11 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 					ToolCalls []ToolCall `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
-			Usage struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-			} `json:"usage"`
+Usage struct {
+			PromptTokens     json.Number `json:"prompt_tokens"`
+			CompletionTokens json.Number `json:"completion_tokens"`
+			TotalTokens      json.Number `json:"total_tokens"`
+		} `json:"usage"`
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
@@ -2086,14 +2086,21 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 			continue
 		}
 
-		return &ModelResponse{
+		response := ModelResponse{
 			Content:      chatResp.Choices[0].Message.Content,
 			ToolCalls:    chatResp.Choices[0].Message.ToolCalls,
-			InputTokens:  chatResp.Usage.PromptTokens,
-			OutputTokens: chatResp.Usage.CompletionTokens,
+			InputTokens:  0,
+			OutputTokens: 0,
 			Provider:     config.ProviderName,
 			Model:        config.Model,
-		}, nil
+		}
+		if n, err := chatResp.Usage.PromptTokens.Int64(); err == nil {
+			response.InputTokens = int(n)
+		}
+		if n, err := chatResp.Usage.CompletionTokens.Int64(); err == nil {
+			response.OutputTokens = int(n)
+		}
+		return &response, nil
 	}
 
 	return nil, fmt.Errorf("model call failed after 3 attempts: %w", lastErr)
