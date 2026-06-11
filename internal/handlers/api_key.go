@@ -110,32 +110,20 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	})
 }
 
-// ListAPIKeys 列出 API Key（含用户信息）
+// ListAPIKeys 列出 API Key
 // GET /tenants/:tenantId/api-keys
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
-	type APIKeyWithUser struct {
-		models.APIKey
-		UserEmail       string `db:"user_email" json:"user_email"`
-		UserDisplayName string `db:"user_display_name" json:"user_display_name"`
-	}
-
-	var keys []APIKeyWithUser
-	err := database.DB.Select(&keys, `
-		SELECT k.*, 
-		       COALESCE(u.email, '') as user_email,
-		       COALESCE(u.display_name, '') as user_display_name
-		FROM api_keys k
-		LEFT JOIN users u ON k.user_id = u.id
-		WHERE k.tenant_id = ?
-		ORDER BY k.created_at DESC`, tenantID)
+	var keys []models.APIKey
+	err := database.DB.Select(&keys,
+		"SELECT id, tenant_id, user_id, name, key_prefix, scopes, enabled, expires_at, last_used_at, usage_count, created_at, updated_at FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list API keys"})
 		return
 	}
 	if keys == nil {
-		keys = []APIKeyWithUser{}
+		keys = []models.APIKey{}
 	}
 
 	c.JSON(http.StatusOK, keys)
