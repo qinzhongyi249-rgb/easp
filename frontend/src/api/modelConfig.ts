@@ -27,6 +27,26 @@ export interface ModelConfig {
   updated_at: string;
 }
 
+export interface ValidateModelRequest {
+  base_url: string;
+  api_key: string;
+  model: string;
+  call_type?: string;
+  response_type?: string;
+}
+
+export interface ValidateModelResponse {
+  success: boolean;
+  message: string;
+  api_type?: string;
+  response_type?: string;
+  supports_stream?: boolean;
+  supports_tools?: boolean;
+  token_field_type?: string;
+  prompt_tokens?: number;
+  total_tokens?: number;
+}
+
 export const modelConfigApi = {
   // Providers
   listProviders: (tenantId: string) =>
@@ -55,4 +75,6 @@ export const modelConfigApi = {
     client.delete(`/tenants/${tenantId}/model-configs/${id}`),
   setDefault: (tenantId: string, id: string) =>
     client.put(`/tenants/${tenantId}/model-configs/${id}/default`),
+  validateModel: (tenantId: string, data: ValidateModelRequest) =>
+    client.post<ValidateModelResponse>(`/tenants/${tenantId}/model-configs/validate`, data),
 };

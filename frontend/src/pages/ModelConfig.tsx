@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Dropdown, Tag, Card } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, MoreOutlined, StarFilled } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Dropdown, Tag, Card, Alert } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, MoreOutlined, StarFilled, SafetyOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
-import type { ModelProvider, ModelConfig } from '../api/modelConfig';
+import type { ModelProvider, ModelConfig, ValidateModelResponse } from '../api/modelConfig';
 import { modelConfigApi } from '../api/modelConfig';
 
 const { Title, Text } = Typography;
@@ -21,7 +21,52 @@ const ModelConfigPage: React.FC = () => {
   const [currentProviderId, setCurrentProviderId] = useState<string>('');
   const [providerForm] = Form.useForm();
   const [configForm] = Form.useForm();
+  const [validating, setValidating] = useState(false);
+  const [validationResult, setValidationResult] = useState<ValidateModelResponse | null>(null);
   const isMobile = window.innerWidth < 768;
+
+  // 测试模型连接
+  const testConnection = async () => {
+    const values = await providerForm.validateFields(['base_url', 'api_key']).catch(() => null);
+    if (!values) {
+      message.warning('请先填写基础 URL 和 API Key');
+      return;
+    }
+
+    // 从表单获取模型名称（如果有）
+    const modelName = providerForm.getFieldValue('model_name') || 'gpt-3.5-turbo';
+    
+    setValidating(true);
+    setValidationResult(null);
+    
+    try {
+      const res = await modelConfigApi.validateModel(currentTenant, {
+        base_url: values.base_url,
+        api_key: values.api_key,
+        model: modelName,
+      });
+      
+      setValidationResult(res.data);
+      
+      if (res.data.success) {
+        message.success('验证通过！');
+        // 自动填充识别的配置
+        if (res.data.api_type) {
+          message.info(`识别 API 类型：${res.data.api_type}`);
+        }
+        if (res.data.token_field_type) {
+          message.info(`Token 字段类型：${res.data.token_field_type}`);
+        }
+      } else {
+        message.error(`验证失败：${res.data.message}`);
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || '验证失败');
+    } finally {
+      setValidating(false);
+    }
+  };
 
   const load = async () => {
     if (!currentTenant) return;
@@ -192,22 +237,48 @@ const ModelConfigPage: React.FC = () => {
         pagination={false}
       />
 
-      {/* 供应商弹窗 */}
+{/* 供应商弹窗 */}
       <Modal
         title={editingProvider ? '编辑供应商' : '新建供应商'}
         open={providerModalOpen}
         onOk={onProviderOk}
         onCancel={() => setProviderModalOpen(false)}
-        width={isMobile ? '90%' : 500}
+        width={isMobile ? '90%' : 600}
+        footer={[
+          <Button key="test" icon={<SafetyOutlined />} onClick={testConnection} loading={validating}>
+            测试连接
+          </Button>,
+          <Button key="cancel" onClick={() => setProviderModalOpen(false)}>取消</Button>,
+          <Button key="submit" type="primary" onClick={onProviderOk}>确定</Button>,
+        ]}
       >
         <Form form={providerForm} layout="vertical" size={isMobile ? 'middle' : 'large'}>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="如 openai, xiaomi" /></Form.Item>
-          <Form.Item name="display_name" label="显示名称"><Input placeholder="如 小米, OpenAI" /></Form.Item>
+          <Form.Item name="display_name" label="显示名称"><Input placeholder="如 小米，OpenAI" /></Form.Item>
           <Form.Item name="type" label="类型" rules={[{ required: true }]}><Input placeholder="openai / anthropic / custom" /></Form.Item>
-          <Form.Item name="base_url" label="基础URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com/v1" /></Form.Item>
+          <Form.Item name="base_url" label="基础 URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com/v1" /></Form.Item>
           <Form.Item name="api_key" label="API Key" rules={[{ required: true }]}><Input.Password /></Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         </Form>
+        
+        {validationResult && (
+          <Alert
+            message={validationResult.success ? "验证成功" : "验证失败"}
+            description={
+              <div style={{ fontSize: 13 }}>
+                <div>{validationResult.message}</div>
+                {validationResult.api_type && <div>• API 类型：{validationResult.api_type}</div>}
+                {validationResult.response_type && <div>• 响应格式：{validationResult.response_type}</div>}
+                {validationResult.token_field_type && <div>• Token 字段类型：{validationResult.token_field_type}</div>}
+                {validationResult.supports_tools !== undefined && <div>• 支持工具调用：{validationResult.supports_tools ? '是' : '否'}</div>}
+                {validationResult.supports_stream !== undefined && <div>• 支持流式：{validationResult.supports_stream ? '是' : '否'}</div>}
+              </div>
+            }
+            type={validationResult.success ? 'success' : 'error'}
+            showIcon
+            style={{ marginTop: 16 }}
+          />
+        )}
       </Modal>
 
       {/* 模型配置弹窗 */}

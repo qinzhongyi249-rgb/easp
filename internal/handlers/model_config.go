@@ -1,8 +1,14 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/repositories"
@@ -230,4 +236,188 @@ func (h *ModelConfigHandler) GetDefaultConfig(c *gin.Context) {
 	}
 	
 	c.JSON(http.StatusOK, config)
+}
+
+// ValidateModelRequest 模型验证请求
+type ValidateModelRequest struct {
+	BaseURL      string `json:"base_url" binding:"required"`
+	APIKey       string `json:"api_key" binding:"required"`
+	Model        string `json:"model" binding:"required"`
+	CallType     string `json:"call_type"` // chat_completion / completion
+	ResponseType string `json:"response_type"` // openai / custom
+}
+
+// ValidateModelResponse 模型验证响应
+type ValidateModelResponse struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	APIType        string `json:"api_type"`         // 识别的 API 类型
+	ResponseType   string `json:"response_type"`    // 识别的响应格式
+	SupportsStream bool   `json:"supports_stream"`  // 是否支持流式
+	SupportsTools  bool   `json:"supports_tools"`   // 是否支持工具调用
+	TokenFieldType string `json:"token_field_type"` // token 字段类型：int/float/string
+	PromptTokens   int64  `json:"prompt_tokens,omitempty"`
+	TotalTokens    int64  `json:"total_tokens,omitempty"`
+}
+
+// ValidateModel 验证模型配置
+func (h *ModelConfigHandler) ValidateModel(c *gin.Context) {
+	var req ValidateModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 发送测试请求
+	resp := &ValidateModelResponse{}
+	
+	// 默认尝试 chat_completion
+	callType := req.CallType
+	if callType == "" {
+		callType = "chat_completion"
+	}
+
+	// 构建测试请求
+	testReq := map[string]interface{}{
+		"model": req.Model,
+		"messages": []map[string]string{
+			{"role": "user", "content": "Hello, this is a test."},
+		},
+		"max_tokens": 10,
+		"stream": false,
+	}
+
+	// 添加简单的 tool 测试（如果支持）
+	testReq["tools"] = []map[string]interface{}{
+		{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": "test_tool",
+				"description": "A test tool",
+				"parameters": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+	}
+
+	// 发送 HTTP 请求
+	url := strings.TrimSuffix(req.BaseURL, "/") + "/chat/completions"
+	jsonData, _ := json.Marshal(testReq)
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		resp.Success = false
+		resp.Message = fmt.Sprintf("Failed to create request: %v", err)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		resp.Success = false
+		resp.Message = fmt.Sprintf("Request failed: %v", err)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	defer httpResp.Body.Close()
+
+	// 检查 HTTP 状态码
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		resp.Success = false
+		resp.Message = fmt.Sprintf("HTTP %d: %s", httpResp.StatusCode, string(body))
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// 检查流式支持
+	if httpResp.Header.Get("Content-Type") == "text/event-stream" {
+		resp.SupportsStream = true
+	}
+
+	// 解析响应体
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		resp.Success = false
+		resp.Message = fmt.Sprintf("Failed to read response: %v", err)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// 尝试解析为 OpenAI 格式
+	var openAIResp map[string]interface{}
+	if err := json.Unmarshal(body, &openAIResp); err != nil {
+		resp.Success = false
+		resp.Message = fmt.Sprintf("Failed to parse JSON: %v", err)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// 验证响应结构
+	var message map[string]interface{}
+	if choices, ok := openAIResp["choices"].([]interface{}); ok && len(choices) > 0 {
+		// 检查是否有 message 字段（OpenAI chat 格式）
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := choice["message"].(map[string]interface{}); ok {
+				message = msg
+				if _, hasContent := message["content"]; hasContent {
+					resp.APIType = "chat_completion"
+					resp.ResponseType = "openai"
+				}
+			}
+			
+			// 检查 tool_calls 支持
+			if toolCalls, ok := message["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+				resp.SupportsTools = true
+			}
+		}
+	} else {
+		// 尝试 completion 格式
+		if _, ok := openAIResp["choices"].([]interface{}); ok {
+			resp.APIType = "completion"
+			resp.ResponseType = "openai"
+		}
+	}
+
+	// 检查 token 字段类型
+	if usage, ok := openAIResp["usage"].(map[string]interface{}); ok {
+		// 检测 token 字段类型
+		for _, key := range []string{"prompt_tokens", "completion_tokens", "total_tokens"} {
+			if val, exists := usage[key]; exists {
+				switch val.(type) {
+				case float64:
+					resp.TokenFieldType = "float"
+					// 尝试转换为 int64
+					if fval, ok := val.(float64); ok {
+						if key == "prompt_tokens" {
+							resp.PromptTokens = int64(fval)
+						} else if key == "total_tokens" {
+							resp.TotalTokens = int64(fval)
+						}
+					}
+				case int:
+					resp.TokenFieldType = "int"
+					if ival, ok := val.(int); ok {
+						if key == "prompt_tokens" {
+							resp.PromptTokens = int64(ival)
+						} else if key == "total_tokens" {
+							resp.TotalTokens = int64(ival)
+						}
+					}
+				case string:
+					resp.TokenFieldType = "string"
+				}
+				break
+			}
+		}
+	}
+
+	resp.Success = true
+	resp.Message = "Validation successful"
+	c.JSON(http.StatusOK, resp)
 }
