@@ -25,24 +25,28 @@ const ModelConfigPage: React.FC = () => {
   const [validationResult, setValidationResult] = useState<ValidateModelResponse | null>(null);
   const isMobile = window.innerWidth < 768;
 
-  // 测试模型连接
-  const testConnection = async () => {
-    const values = await providerForm.validateFields(['base_url', 'api_key']).catch(() => null);
-    if (!values) {
-      message.warning('请先填写基础 URL 和 API Key');
+  // 测试模型连接（用于模型配置）
+  const testConfigConnection = async () => {
+    // 获取当前供应商的 base_url 和 api_key
+    const provider = providers.find(p => p.id === currentProviderId);
+    if (!provider) {
+      message.warning('请先选择供应商');
       return;
     }
 
-    // 从表单获取模型名称（如果有）
-    const modelName = providerForm.getFieldValue('model_name') || 'gpt-3.5-turbo';
+    const modelName = configForm.getFieldValue('model_name');
+    if (!modelName) {
+      message.warning('请先填写模型名称');
+      return;
+    }
     
     setValidating(true);
     setValidationResult(null);
     
     try {
       const res = await modelConfigApi.validateModel(currentTenant, {
-        base_url: values.base_url,
-        api_key: values.api_key,
+        base_url: provider.base_url,
+        api_key: provider.api_key || '',
         model: modelName,
       });
       
@@ -50,7 +54,6 @@ const ModelConfigPage: React.FC = () => {
       
       if (res.data.success) {
         message.success('验证通过！');
-        // 自动填充识别的配置
         if (res.data.api_type) {
           message.info(`识别 API 类型：${res.data.api_type}`);
         }
@@ -245,9 +248,6 @@ const ModelConfigPage: React.FC = () => {
         onCancel={() => setProviderModalOpen(false)}
         width={isMobile ? '90%' : 600}
         footer={[
-          <Button key="test" icon={<SafetyOutlined />} onClick={testConnection} loading={validating}>
-            测试连接
-          </Button>,
           <Button key="cancel" onClick={() => setProviderModalOpen(false)}>取消</Button>,
           <Button key="submit" type="primary" onClick={onProviderOk}>确定</Button>,
         ]}
@@ -258,6 +258,33 @@ const ModelConfigPage: React.FC = () => {
           <Form.Item name="type" label="类型" rules={[{ required: true }]}><Input placeholder="openai / anthropic / custom" /></Form.Item>
           <Form.Item name="base_url" label="基础 URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com/v1" /></Form.Item>
           <Form.Item name="api_key" label="API Key" rules={[{ required: true }]}><Input.Password /></Form.Item>
+          <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+        </Form>
+      </Modal>
+
+{/* 模型配置弹窗 */}
+      <Modal
+        title={editingConfig ? '编辑模型' : '添加模型'}
+        open={configModalOpen}
+        onOk={onConfigOk}
+        onCancel={() => setConfigModalOpen(false)}
+        width={isMobile ? '90%' : 600}
+        footer={[
+          <Button key="test" icon={<SafetyOutlined />} onClick={testConfigConnection} loading={validating}>
+            测试连接
+          </Button>,
+          <Button key="cancel" onClick={() => setConfigModalOpen(false)}>取消</Button>,
+          <Button key="submit" type="primary" onClick={onConfigOk}>确定</Button>,
+        ]}
+      >
+        <Form form={configForm} layout="vertical" size={isMobile ? 'middle' : 'large'}
+          initialValues={{ temperature: 0.7, max_tokens: 4096, is_default: false, enabled: true }}
+        >
+          <Form.Item name="model_name" label="模型名称" rules={[{ required: true, message: '请输入模型名称' }]}><Input placeholder="如 gpt-4o, mimo-v2.5-pro" /></Form.Item>
+          <Form.Item name="display_name" label="显示名称"><Input placeholder="如 GPT-4o, MiMo Pro" /></Form.Item>
+          <Form.Item name="temperature" label="温度"><InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} placeholder="0.0 - 2.0" /></Form.Item>
+          <Form.Item name="max_tokens" label="最大 Token 数"><InputNumber min={1} max={1000000} step={256} style={{ width: '100%' }} placeholder="如 4096" /></Form.Item>
+          <Form.Item name="is_default" label="设为默认" valuePropName="checked"><Switch /></Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
         </Form>
         
@@ -279,26 +306,6 @@ const ModelConfigPage: React.FC = () => {
             style={{ marginTop: 16 }}
           />
         )}
-      </Modal>
-
-      {/* 模型配置弹窗 */}
-      <Modal
-        title={editingConfig ? '编辑模型' : '添加模型'}
-        open={configModalOpen}
-        onOk={onConfigOk}
-        onCancel={() => setConfigModalOpen(false)}
-        width={isMobile ? '90%' : 500}
-      >
-        <Form form={configForm} layout="vertical" size={isMobile ? 'middle' : 'large'}
-          initialValues={{ temperature: 0.7, max_tokens: 4096, is_default: false, enabled: true }}
-        >
-          <Form.Item name="model_name" label="模型名称" rules={[{ required: true, message: '请输入模型名称' }]}><Input placeholder="如 gpt-4o, mimo-v2.5-pro" /></Form.Item>
-          <Form.Item name="display_name" label="显示名称"><Input placeholder="如 GPT-4o, MiMo Pro" /></Form.Item>
-          <Form.Item name="temperature" label="温度"><InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} placeholder="0.0 - 2.0" /></Form.Item>
-          <Form.Item name="max_tokens" label="最大Token数"><InputNumber min={1} max={1000000} step={256} style={{ width: '100%' }} placeholder="如 4096" /></Form.Item>
-          <Form.Item name="is_default" label="设为默认" valuePropName="checked"><Switch /></Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
-        </Form>
       </Modal>
     </div>
   );

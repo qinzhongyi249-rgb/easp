@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,11 +20,60 @@ import (
 	"github.com/easp-platform/easp/internal/modelservice"
 	"github.com/easp-platform/easp/internal/repositories"
 	skillPkg "github.com/easp-platform/easp/internal/skill"
-	"github.com/gin-gonic/gin"
+"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-// ChatHandler AI助手处理器
+// sanitizeToolName 将工具名称转换为符合 Gemini API 规范的格式
+// 规则：1) 必须以字母或下划线开头 2) 只能包含字母数字._:- 3) 最大 128 字符
+// 中文/特殊字符会被替换为下划线，连续的下划线会被合并
+var toolNameRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.:-]{0,127}$`)
+
+func sanitizeToolName(name string) string {
+	// 如果已经符合规范，直接返回
+	if toolNameRegex.MatchString(name) {
+		return name
+	}
+	
+	// 1. 将所有非字母数字字符替换为下划线
+	sanitized := ""
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			sanitized += string(r)
+		} else {
+			sanitized += "_"
+		}
+	}
+	
+	// 2. 合并连续的下划线
+	for strings.Contains(sanitized, "__") {
+		sanitized = strings.ReplaceAll(sanitized, "__", "_")
+	}
+	
+	// 3. 确保以字母或下划线开头
+	if len(sanitized) > 0 {
+		first := sanitized[0]
+		if first >= '0' && first <= '9' {
+			sanitized = "_" + sanitized
+		} else if first != '_' && (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') {
+			sanitized = "_" + sanitized
+		}
+	}
+	
+	// 4. 截取最大 128 字符
+	if len(sanitized) > 128 {
+		sanitized = sanitized[:128]
+	}
+	
+	// 5. 如果为空，返回默认值
+	if sanitized == "" {
+		sanitized = "unknown_tool"
+	}
+	
+	return sanitized
+}
+
+// ChatHandler AI 助手处理器
 type ChatHandler struct {
 	modelService    *modelservice.ModelService
 	memoryRouter    *easpMemory.MemoryRouter
@@ -327,7 +377,7 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 		result = append(result, ToolDefinition{
 			Type: "function",
 			Function: FunctionDef{
-				Name:        "skill_" + sk.Name,
+				Name:        "skill_" + sanitizeToolName(sk.Name),
 				Description: desc,
 				Parameters:  params,
 			},
@@ -390,7 +440,7 @@ func loadMCPToolDefinitions(tenantID string, allowedIDs map[string]bool, hasWild
 		result = append(result, ToolDefinition{
 			Type: "function",
 			Function: FunctionDef{
-				Name:        "mcp_" + tool.Name,
+				Name:        "mcp_" + sanitizeToolName(tool.Name),
 				Description: desc,
 				Parameters:  params,
 			},
@@ -2059,7 +2109,7 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 			continue
 		}
 
-		var chatResp struct {
+var chatResp struct {
 			Choices []struct {
 				Message struct {
 					Role      string     `json:"role"`
@@ -2067,19 +2117,34 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 					ToolCalls []ToolCall `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
-Usage struct {
-			PromptTokens     json.Number `json:"prompt_tokens"`
-			CompletionTokens json.Number `json:"completion_tokens"`
-			TotalTokens      json.Number `json:"total_tokens"`
-		} `json:"usage"`
+			Usage struct {
+				PromptTokens     json.Number `json:"prompt_tokens"`
+				CompletionTokens json.Number `json:"completion_tokens"`
+				TotalTokens      json.Number `json:"total_tokens"`
+			} `json:"usage"`
 		}
 
-		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		// 先读取原始 JSON 用于调试
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
 			resp.Body.Close()
-			lastErr = err
+			lastErr = fmt.Errorf("read response failed: %w", err)
 			continue
 		}
 		resp.Body.Close()
+
+		// 尝试解析
+		if err := json.Unmarshal(respBody, &chatResp); err != nil {
+			// 打印原始 JSON 用于调试
+			log.Printf("=== DECODE_ERROR_DEBUG ===")
+			rawJSON := string(respBody)
+			if len(rawJSON) > 500 {
+				rawJSON = rawJSON[:500]
+			}
+			log.Printf("Decode error: %v\nRaw JSON: %s", err, rawJSON)
+			lastErr = err
+			continue
+		}
 
 		if len(chatResp.Choices) == 0 {
 			lastErr = fmt.Errorf("no response from model")
