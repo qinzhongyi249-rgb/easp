@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -2133,15 +2134,31 @@ var chatResp struct {
 		}
 		resp.Body.Close()
 
+		// 检查并处理 gzip 压缩
+		if resp.Header.Get("Content-Encoding") == "gzip" || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/gzip") {
+			reader, err := gzip.NewReader(strings.NewReader(string(respBody)))
+			if err == nil {
+				respBody, err = io.ReadAll(reader)
+				if err != nil {
+					log.Printf("Gzip decompress failed: %v", err)
+				}
+				reader.Close()
+			} else {
+				log.Printf("Gzip reader creation failed: %v", err)
+			}
+		}
+
+		// 检查 BOM
+		if len(respBody) >= 3 && respBody[0] == 0xEF && respBody[1] == 0xBB && respBody[2] == 0xBF {
+			respBody = respBody[3:]
+		}
+
 		// 尝试解析
 		if err := json.Unmarshal(respBody, &chatResp); err != nil {
-			// 打印原始 JSON 用于调试
-			log.Printf("=== DECODE_ERROR_DEBUG ===")
-			rawJSON := string(respBody)
-			if len(rawJSON) > 500 {
-				rawJSON = rawJSON[:500]
+			log.Printf("JSON unmarshal failed: %v", err)
+			if syntaxErr, ok := err.(*json.SyntaxError); ok {
+				log.Printf("Syntax error at offset: %d", syntaxErr.Offset)
 			}
-			log.Printf("Decode error: %v\nRaw JSON: %s", err, rawJSON)
 			lastErr = err
 			continue
 		}
