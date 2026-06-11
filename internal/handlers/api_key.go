@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
+	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -29,10 +30,11 @@ type CreateAPIKeyRequest struct {
 	ExpiresIn int      `json:"expires_in"` // 有效天数，0=永不过期
 }
 
-// CreateAPIKey 创建 API Key
+// CreateAPIKey 创建 API Key（绑定到当前登录用户）
 // POST /tenants/:tenantId/api-keys
 func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	tenantID := c.Param("tenantId")
+	userID := c.GetString(middleware.ContextUserID)
 
 	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -74,6 +76,7 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	apiKey := models.APIKey{
 		ID:        uuid.New().String(),
 		TenantID:  tenantID,
+		UserID:    userID,
 		Name:      req.Name,
 		KeyPrefix: keyPrefix,
 		KeyHash:   string(keyHash),
@@ -85,9 +88,9 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	}
 
 	_, err = database.DB.Exec(`
-		INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, scopes, enabled, expires_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		apiKey.ID, apiKey.TenantID, apiKey.Name, apiKey.KeyPrefix, apiKey.KeyHash,
+		INSERT INTO api_keys (id, tenant_id, user_id, name, key_prefix, key_hash, scopes, enabled, expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		apiKey.ID, apiKey.TenantID, apiKey.UserID, apiKey.Name, apiKey.KeyPrefix, apiKey.KeyHash,
 		apiKey.Scopes, apiKey.Enabled, apiKey.ExpiresAt, apiKey.CreatedAt, apiKey.UpdatedAt)
 	if err != nil {
 		log.Printf("Failed to create API key: %v", err)
@@ -107,20 +110,32 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 	})
 }
 
-// ListAPIKeys 列出 API Key
+// ListAPIKeys 列出 API Key（含用户信息）
 // GET /tenants/:tenantId/api-keys
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
-	var keys []models.APIKey
-	err := database.DB.Select(&keys,
-		"SELECT * FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
+	type APIKeyWithUser struct {
+		models.APIKey
+		UserEmail       string `db:"user_email" json:"user_email"`
+		UserDisplayName string `db:"user_display_name" json:"user_display_name"`
+	}
+
+	var keys []APIKeyWithUser
+	err := database.DB.Select(&keys, `
+		SELECT k.*, 
+		       COALESCE(u.email, '') as user_email,
+		       COALESCE(u.display_name, '') as user_display_name
+		FROM api_keys k
+		LEFT JOIN users u ON k.user_id = u.id
+		WHERE k.tenant_id = ?
+		ORDER BY k.created_at DESC`, tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list API keys"})
 		return
 	}
 	if keys == nil {
-		keys = []models.APIKey{}
+		keys = []APIKeyWithUser{}
 	}
 
 	c.JSON(http.StatusOK, keys)

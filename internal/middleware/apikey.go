@@ -15,8 +15,9 @@ import (
 
 // Context keys for Embed API
 const (
-	ContextAPIKey   = "api_key"
-	ContextEmbedTenantID = "embed_tenant_id"
+	ContextAPIKey         = "api_key"
+	ContextEmbedTenantID  = "embed_tenant_id"
+	ContextEmbedUserID    = "embed_user_id"
 )
 
 // APIKeyAuth API Key 认证中间件（用于 Embed API）
@@ -100,6 +101,7 @@ func APIKeyAuth() gin.HandlerFunc {
 		// 设置上下文
 		c.Set(ContextAPIKey, key)
 		c.Set(ContextEmbedTenantID, key.TenantID)
+		c.Set(ContextEmbedUserID, key.UserID)
 
 		c.Next()
 	}

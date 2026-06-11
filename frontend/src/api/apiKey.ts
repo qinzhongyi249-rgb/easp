@@ -3,6 +3,9 @@ import client from './client';
 export interface APIKey {
   id: string;
   tenant_id: string;
+  user_id: string;
+  user_email?: string;
+  user_display_name?: string;
   name: string;
   key?: string;        // 只在创建时返回
   key_prefix: string;

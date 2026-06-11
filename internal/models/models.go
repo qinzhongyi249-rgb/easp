@@ -258,10 +258,11 @@ type SSOProvider struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
-// APIKey API密钥
+// APIKey API密钥（绑定到用户）
 type APIKey struct {
 	ID          string     `db:"id" json:"id"`
 	TenantID    string     `db:"tenant_id" json:"tenant_id"`
+	UserID      string     `db:"user_id" json:"user_id"`         // 绑定的用户ID
 	Name        string     `db:"name" json:"name"`
 	KeyPrefix   string     `db:"key_prefix" json:"key_prefix"`     // 前8字符，用于显示
 	KeyHash     string     `db:"key_hash" json:"-"`                 // bcrypt hash，不返回给前端

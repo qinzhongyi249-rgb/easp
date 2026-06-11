@@ -59,6 +59,7 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 	}
 
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
+	userID := c.GetString(middleware.ContextEmbedUserID)
 	apiKeyVal, _ := c.Get(middleware.ContextAPIKey)
 	apiKey := apiKeyVal.(models.APIKey)
 
@@ -162,7 +163,7 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 
 	// 记录 token 消耗
 	if response.InputTokens > 0 || response.OutputTokens > 0 {
-		RecordModelUsage(tenantID, "", response.Provider, response.Model,
+		RecordModelUsage(tenantID, userID, response.Provider, response.Model,
 			"/embed/chat", response.InputTokens, response.OutputTokens, 0)
 	}
 

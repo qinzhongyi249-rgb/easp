@@ -265,9 +265,11 @@ func AutoMigrate() error {
 		`ALTER TABLE tenants ADD COLUMN daily_token_quota INT NOT NULL DEFAULT 0 COMMENT '每日token消耗上限，0=不限' AFTER monthly_quota`,
 		`ALTER TABLE tenants ADD COLUMN monthly_token_quota INT NOT NULL DEFAULT 0 COMMENT '每月token消耗上限，0=不限' AFTER daily_token_quota`,
 		// ========== API Key ==========
+		`ALTER TABLE api_keys ADD COLUMN user_id VARCHAR(36) NOT NULL DEFAULT '' COMMENT '绑定的用户ID' AFTER tenant_id`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id VARCHAR(36) PRIMARY KEY,
 			tenant_id VARCHAR(36) NOT NULL,
+			user_id VARCHAR(36) NOT NULL COMMENT '绑定的用户ID',
 			name VARCHAR(100) NOT NULL,
 			key_prefix VARCHAR(16) NOT NULL COMMENT 'Key前缀，用于显示',
 			key_hash VARCHAR(255) NOT NULL COMMENT 'bcrypt hash',
@@ -279,6 +281,7 @@ func AutoMigrate() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			INDEX idx_tenant_id (tenant_id),
+			INDEX idx_user_id (user_id),
 			UNIQUE INDEX idx_key_prefix (key_prefix)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS embed_sessions (

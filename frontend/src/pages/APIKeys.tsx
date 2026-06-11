@@ -84,6 +84,12 @@ const APIKeys: React.FC = () => {
       { title: 'ID', dataIndex: 'id', key: 'id', ellipsis: true, width: 80,
         render: (v: string) => v.substring(0, 8) + '...' },
     ] : []),
+    { title: '绑定用户', key: 'user', render: (_: unknown, record: APIKey) => (
+      <div>
+        <div style={{ fontWeight: 500 }}>{record.user_display_name || '-'}</div>
+        <div style={{ fontSize: 12, color: '#888' }}>{record.user_email || record.user_id}</div>
+      </div>
+    )},
     { title: '名称', dataIndex: 'name', key: 'name' },
     { title: 'Key 前缀', dataIndex: 'key_prefix', key: 'key_prefix',
       render: (v: string) => <Tag>{v}</Tag> },
