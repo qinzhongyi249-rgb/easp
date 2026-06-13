@@ -163,8 +163,9 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 
 	// 记录 token 消耗
 	if response.InputTokens > 0 || response.OutputTokens > 0 {
-		RecordModelUsage(tenantID, userID, response.Provider, response.Model,
-			"/embed/chat", response.InputTokens, response.OutputTokens, 0)
+		RecordModelUsageWithContext(tenantID, userID, response.Provider, response.Model,
+			"/embed/chat", response.InputTokens, response.OutputTokens, response.CachedTokens, 0,
+			"embed", "嵌入式助手", "embed", sessionID, "")
 	}
 
 	// 发送响应

@@ -18,6 +18,7 @@ import AuditLogs from './pages/AuditLogs';
 import APIKeys from './pages/APIKeys';
 import SSOConfig from './pages/SSOConfig';
 import Assistant from './pages/Assistant';
+import UsageAnalytics from './pages/UsageAnalytics';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
@@ -48,6 +49,7 @@ const AppRoutes = () => {
         <Route path="api-keys" element={<APIKeys />} />
         <Route path="sso-config" element={<SSOConfig />} />
         <Route path="assistant" element={<Assistant />} />
+        <Route path="usage-analytics" element={<UsageAnalytics />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

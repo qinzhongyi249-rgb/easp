@@ -207,12 +207,37 @@ func AutoMigrate() error {
 			model_name VARCHAR(100) NOT NULL,
 			input_tokens INT NOT NULL DEFAULT 0,
 			output_tokens INT NOT NULL DEFAULT 0,
+			cached_tokens INT NOT NULL DEFAULT 0 COMMENT '命中缓存的输入token数',
 			total_tokens INT NOT NULL DEFAULT 0,
 			latency_ms INT NOT NULL DEFAULT 0,
 			endpoint VARCHAR(255) NOT NULL DEFAULT '',
+			source VARCHAR(32) NOT NULL DEFAULT 'unknown' COMMENT '调用来源: ai_assistant/embed/mcp_api/skill/manual/unknown',
+			source_name VARCHAR(100) NOT NULL DEFAULT '' COMMENT '来源名称',
+			resource_type VARCHAR(32) NOT NULL DEFAULT '' COMMENT '资源类型: assistant/embed/mcp_tool/skill/builtin_tool',
+			resource_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '资源ID',
+			request_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '请求链路ID',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			INDEX idx_tenant_date (tenant_id, created_at),
-			INDEX idx_model (model_provider, model_name)
+			INDEX idx_model (model_provider, model_name),
+			INDEX idx_source (tenant_id, source, created_at),
+			INDEX idx_resource (tenant_id, resource_type, resource_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS tool_call_usage (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			tenant_id VARCHAR(36) NOT NULL,
+			user_id VARCHAR(36) NOT NULL DEFAULT '',
+			resource_type VARCHAR(32) NOT NULL COMMENT 'mcp_tool/skill/builtin_tool',
+			resource_id VARCHAR(64) NOT NULL DEFAULT '',
+			resource_name VARCHAR(128) NOT NULL DEFAULT '',
+			source VARCHAR(32) NOT NULL DEFAULT '' COMMENT 'assistant/skill/mcp_api/embed/manual',
+			status VARCHAR(32) NOT NULL DEFAULT 'success',
+			latency_ms INT NOT NULL DEFAULT 0,
+			request_id VARCHAR(64) NOT NULL DEFAULT '',
+			error_message TEXT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_tenant_date (tenant_id, created_at),
+			INDEX idx_resource (tenant_id, resource_type, resource_id),
+			INDEX idx_source (tenant_id, source, created_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 
@@ -258,12 +283,28 @@ func AutoMigrate() error {
 		// roles 表新增 MCP工具和技能权限字段
 		`ALTER TABLE roles ADD COLUMN allowed_mcp_tools TEXT NULL DEFAULT NULL COMMENT '允许使用的MCP工具ID JSON数组' AFTER tools`,
 		`ALTER TABLE roles ADD COLUMN allowed_skills TEXT NULL DEFAULT NULL COMMENT '允许使用的技能ID JSON数组' AFTER allowed_mcp_tools`,
+		// ========== 技能标准范式 ==========
+		`ALTER TABLE skills ADD COLUMN category VARCHAR(100) NULL DEFAULT NULL COMMENT '技能分类' AFTER description`,
+		`ALTER TABLE skills ADD COLUMN tags JSON NULL DEFAULT NULL COMMENT '标签JSON数组' AFTER version`,
+		`ALTER TABLE skills ADD COLUMN input_schema JSON NULL DEFAULT NULL COMMENT '输入参数Schema' AFTER triggers`,
+		`ALTER TABLE skills ADD COLUMN output_schema JSON NULL DEFAULT NULL COMMENT '输出Schema' AFTER input_schema`,
+		`ALTER TABLE skills ADD COLUMN usage_count INT NOT NULL DEFAULT 0 COMMENT '使用次数' AFTER status`,
+		`ALTER TABLE skills ADD COLUMN last_used_at DATETIME NULL DEFAULT NULL COMMENT '最后使用时间' AFTER usage_count`,
 		// ========== 限流配额 ==========
 		`ALTER TABLE tenants ADD COLUMN rate_limit INT NOT NULL DEFAULT 0 COMMENT '每分钟最大请求数，0=不限' AFTER max_users`,
 		`ALTER TABLE tenants ADD COLUMN daily_quota INT NOT NULL DEFAULT 0 COMMENT '每日API调用上限，0=不限' AFTER rate_limit`,
 		`ALTER TABLE tenants ADD COLUMN monthly_quota INT NOT NULL DEFAULT 0 COMMENT '每月API调用上限，0=不限' AFTER daily_quota`,
 		`ALTER TABLE tenants ADD COLUMN daily_token_quota INT NOT NULL DEFAULT 0 COMMENT '每日token消耗上限，0=不限' AFTER monthly_quota`,
 		`ALTER TABLE tenants ADD COLUMN monthly_token_quota INT NOT NULL DEFAULT 0 COMMENT '每月token消耗上限，0=不限' AFTER daily_token_quota`,
+		// ========== 用量分析 ==========
+		`ALTER TABLE model_usage ADD COLUMN cached_tokens INT NOT NULL DEFAULT 0 COMMENT '命中缓存的输入token数' AFTER output_tokens`,
+		`ALTER TABLE model_usage ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'unknown' COMMENT '调用来源: ai_assistant/embed/mcp_api/skill/manual/unknown' AFTER endpoint`,
+		`ALTER TABLE model_usage ADD COLUMN source_name VARCHAR(100) NOT NULL DEFAULT '' COMMENT '来源名称' AFTER source`,
+		`ALTER TABLE model_usage ADD COLUMN resource_type VARCHAR(32) NOT NULL DEFAULT '' COMMENT '资源类型' AFTER source_name`,
+		`ALTER TABLE model_usage ADD COLUMN resource_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '资源ID' AFTER resource_type`,
+		`ALTER TABLE model_usage ADD COLUMN request_id VARCHAR(64) NOT NULL DEFAULT '' COMMENT '请求链路ID' AFTER resource_id`,
+		`CREATE INDEX idx_model_usage_source ON model_usage (tenant_id, source, created_at)`,
+		`CREATE INDEX idx_model_usage_resource ON model_usage (tenant_id, resource_type, resource_id)`,
 		// ========== API Key ==========
 		`ALTER TABLE api_keys ADD COLUMN user_id VARCHAR(36) NOT NULL DEFAULT '' COMMENT '绑定的用户ID' AFTER tenant_id`,
 		`CREATE TABLE IF NOT EXISTS api_keys (

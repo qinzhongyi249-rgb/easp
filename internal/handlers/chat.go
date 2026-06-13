@@ -9,11 +9,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
+	"github.com/easp-platform/easp/internal/logger"
 	easpMCP "github.com/easp-platform/easp/internal/mcp"
 	easpMemory "github.com/easp-platform/easp/internal/memory"
 	"github.com/easp-platform/easp/internal/middleware"
@@ -21,7 +23,7 @@ import (
 	"github.com/easp-platform/easp/internal/modelservice"
 	"github.com/easp-platform/easp/internal/repositories"
 	skillPkg "github.com/easp-platform/easp/internal/skill"
-"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -35,7 +37,7 @@ func sanitizeToolName(name string) string {
 	if toolNameRegex.MatchString(name) {
 		return name
 	}
-	
+
 	// 1. 将所有非字母数字字符替换为下划线
 	sanitized := ""
 	for _, r := range name {
@@ -45,12 +47,12 @@ func sanitizeToolName(name string) string {
 			sanitized += "_"
 		}
 	}
-	
+
 	// 2. 合并连续的下划线
 	for strings.Contains(sanitized, "__") {
 		sanitized = strings.ReplaceAll(sanitized, "__", "_")
 	}
-	
+
 	// 3. 确保以字母或下划线开头
 	if len(sanitized) > 0 {
 		first := sanitized[0]
@@ -60,17 +62,17 @@ func sanitizeToolName(name string) string {
 			sanitized = "_" + sanitized
 		}
 	}
-	
+
 	// 4. 截取最大 128 字符
 	if len(sanitized) > 128 {
 		sanitized = sanitized[:128]
 	}
-	
+
 	// 5. 如果为空，返回默认值
 	if sanitized == "" {
 		sanitized = "unknown_tool"
 	}
-	
+
 	return sanitized
 }
 
@@ -134,6 +136,7 @@ type ToolCall struct {
 // SSE事件类型
 const (
 	SSEEventStatus    = "status"     // 状态更新
+	SSEEventHeartbeat = "heartbeat"  // 长任务心跳
 	SSEEventTool      = "tool"       // 工具执行结果
 	SSEEventDelta     = "delta"      // 流式文本片段
 	SSEEventDone      = "done"       // 完成
@@ -146,6 +149,69 @@ func sendSSE(c *gin.Context, event string, data any) {
 	jsonData, _ := json.Marshal(data)
 	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, string(jsonData))
 	c.Writer.Flush()
+}
+
+type modelCallResult struct {
+	response *ModelResponse
+	err      error
+}
+
+type toolExecResult struct {
+	result string
+}
+
+// waitModelWithHeartbeat 在模型等待期间持续向前端发送 heartbeat，避免代理/浏览器长时间无数据断开。
+// 注意：模型调用在 goroutine 中执行，SSE 写入只在当前 goroutine 中发生，避免并发写 ResponseWriter。
+func waitModelWithHeartbeat(c *gin.Context, requestStart time.Time, stage, message string, call func() (*ModelResponse, error)) (*ModelResponse, error) {
+	resultCh := make(chan modelCallResult, 1)
+	go func() {
+		resp, err := call()
+		resultCh <- modelCallResult{response: resp, err: err}
+	}()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return nil, c.Request.Context().Err()
+		case res := <-resultCh:
+			return res.response, res.err
+		case <-ticker.C:
+			sendSSE(c, SSEEventHeartbeat, map[string]any{
+				"message":    message,
+				"stage":      stage,
+				"elapsed_ms": time.Since(requestStart).Milliseconds(),
+				"total_ms":   time.Since(requestStart).Milliseconds(),
+			})
+		}
+	}
+}
+
+// waitToolWithHeartbeat 在工具执行等待期间持续发送 heartbeat。
+func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, stage, message string, call func() string) (string, error) {
+	resultCh := make(chan toolExecResult, 1)
+	go func() {
+		resultCh <- toolExecResult{result: call()}
+	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return "", c.Request.Context().Err()
+		case res := <-resultCh:
+			return res.result, nil
+		case <-ticker.C:
+			sendSSE(c, SSEEventHeartbeat, map[string]any{
+				"message":    message,
+				"stage":      stage,
+				"elapsed_ms": time.Since(requestStart).Milliseconds(),
+				"total_ms":   time.Since(requestStart).Milliseconds(),
+			})
+		}
+	}
 }
 
 // getSystemPrompt 获取系统提示
@@ -198,15 +264,15 @@ func logAudit(tenantID, userID, toolName, action, resource, detail string) {
 // toolPermissionMap 工具→权限映射
 var toolPermissionMap = map[string]string{
 	// 查询工具
-	"list_users":        "users",
-	"get_user":          "users",
-	"list_connectors":   "connectors",
-	"get_connector":     "connectors",
-	"list_mcp_tools":    "mcp-tools",
-	"get_mcp_tool":      "mcp-tools",
-	"list_skills":       "skills",
-	"get_skill":         "skills",
-	"list_memory_pools": "memory",
+	"list_users":         "users",
+	"get_user":           "users",
+	"list_connectors":    "connectors",
+	"get_connector":      "connectors",
+	"list_mcp_tools":     "mcp-tools",
+	"get_mcp_tool":       "mcp-tools",
+	"list_skills":        "skills",
+	"get_skill":          "skills",
+	"list_memory_pools":  "memory",
 	"get_memory_entries": "memory",
 	// 角色工具
 	"assign_role": "roles",
@@ -216,15 +282,15 @@ var toolPermissionMap = map[string]string{
 	"get_tenant_info": "*",
 	"update_tenant":   "*",
 	// 写操作工具（需对应权限）
-	"create_connector":   "connectors",
-	"update_connector":   "connectors",
-	"create_mcp_tool":    "mcp-tools",
-	"update_mcp_tool":    "mcp-tools",
-	"create_skill":       "skills",
-	"update_skill":       "skills",
-	"create_memory_pool": "memory",
-	"create_memory_entry":"memory",
-	"update_memory_entry":"memory",
+	"create_connector":    "connectors",
+	"update_connector":    "connectors",
+	"create_mcp_tool":     "mcp-tools",
+	"update_mcp_tool":     "mcp-tools",
+	"create_skill":        "skills",
+	"update_skill":        "skills",
+	"create_memory_pool":  "memory",
+	"create_memory_entry": "memory",
+	"update_memory_entry": "memory",
 	// 技能执行
 	"execute_skill": "skills",
 	// MCP工具执行
@@ -324,7 +390,7 @@ func getToolsForPermissions(permissions []string) []ToolDefinition {
 	return filtered
 }
 
-// loadSkillToolDefinitions 从数据库加载租户的active Skills，转换为AI可直接调用的ToolDefinition
+// loadSkillToolDefinitions 从数据库加载租户的 active Skills，转换为 AI 可直接调用的 ToolDefinition
 func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, hasWildcard bool) []ToolDefinition {
 	var skills []models.Skill
 	var err error
@@ -350,19 +416,38 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 
 	result := make([]ToolDefinition, 0, len(skills))
 	for _, sk := range skills {
-		// 解析 input_schema 作为 parameters
-		var params map[string]any
+		// 跳过空名称的技能
+		if sk.Name == "" {
+			log.Printf("loadSkillToolDefinitions: skipping skill with empty name, id=%s", sk.ID)
+			continue
+		}
+
+		log.Printf("loadSkillToolDefinitions: loaded skill id=%s, name=%s", sk.ID, sk.Name)
+
+		// 使用技能 ID 的短前缀 + 名称，确保唯一性
+		// 取 ID 的前 8 个字符（去掉连字符）作为前缀
+		idPrefix := strings.ReplaceAll(sk.ID, "-", "")[:8]
+		safeName := sanitizeToolName(sk.Name)
+		toolName := "skill_" + idPrefix + "_" + safeName
+
+		// 确保工具名符合 Gemini 规范（最大 128 字符）
+		if len(toolName) > 128 {
+			toolName = toolName[:128]
+		}
+
+		// 验证工具名
+		if !toolNameRegex.MatchString(toolName) {
+			log.Printf("loadSkillToolDefinitions: invalid tool name '%s' for skill %s, using fallback", toolName, sk.ID)
+			toolName = "skill_" + idPrefix
+		}
+
+		params := map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
 		if sk.InputSchema != nil && *sk.InputSchema != "" {
 			if err := json.Unmarshal([]byte(*sk.InputSchema), &params); err != nil {
-				params = map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				}
-			}
-		} else {
-			params = map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
+				log.Printf("loadSkillToolDefinitions: failed to parse input_schema for skill %s: %v", sk.ID, err)
 			}
 		}
 
@@ -371,14 +456,14 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 			desc = *sk.Description
 		}
 		if desc == "" {
-			desc = "技能: " + sk.Name
+			desc = "技能：" + sk.Name
 		}
 		desc = "[技能] " + desc
 
 		result = append(result, ToolDefinition{
 			Type: "function",
 			Function: FunctionDef{
-				Name:        "skill_" + sanitizeToolName(sk.Name),
+				Name:        toolName,
 				Description: desc,
 				Parameters:  params,
 			},
@@ -610,9 +695,9 @@ func getTools() []ToolDefinition {
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name":     map[string]any{"type": "string", "description": "连接器名称，如 my-api"},
-						"type":     map[string]any{"type": "string", "description": "连接器类型，如 openapi, custom"},
-						"base_url": map[string]any{"type": "string", "description": "API基础URL，如 https://api.example.com/v1"},
+						"name":      map[string]any{"type": "string", "description": "连接器名称，如 my-api"},
+						"type":      map[string]any{"type": "string", "description": "连接器类型，如 openapi, custom"},
+						"base_url":  map[string]any{"type": "string", "description": "API基础URL，如 https://api.example.com/v1"},
 						"auth_type": map[string]any{"type": "string", "description": "认证类型: none, api_key, bearer, basic"},
 					},
 					"required": []string{"name", "type", "base_url"},
@@ -816,9 +901,9 @@ func getTools() []ToolDefinition {
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name":      map[string]any{"type": "string", "description": "记忆池名称"},
-						"level":     map[string]any{"type": "string", "description": "层级: tenant, user, role"},
-						"owner_id":  map[string]any{"type": "string", "description": "所属者ID（level=user时为用户ID）"},
+						"name":     map[string]any{"type": "string", "description": "记忆池名称"},
+						"level":    map[string]any{"type": "string", "description": "层级: tenant, user, role"},
+						"owner_id": map[string]any{"type": "string", "description": "所属者ID（level=user时为用户ID）"},
 					},
 					"required": []string{"name", "level"},
 				},
@@ -900,6 +985,27 @@ func getToolDisplayName(toolName string) string {
 func ExecuteToolByName(tenantID, toolName string, args map[string]any) string {
 	h := &ChatHandler{}
 	return h.executeTool(tenantID, "", toolName, args)
+}
+
+func classifyCalledTool(toolName string) (resourceType, resourceID, resourceName string) {
+	resourceName = toolName
+	if strings.HasPrefix(toolName, "skill_") {
+		return "skill", strings.TrimPrefix(toolName, "skill_"), resourceName
+	}
+	if strings.HasPrefix(toolName, "mcp_") {
+		return "mcp_tool", strings.TrimPrefix(toolName, "mcp_"), resourceName
+	}
+	return "builtin_tool", "", resourceName
+}
+
+func toolCallStatusFromResult(result string) (string, error) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(result), &obj); err == nil {
+		if errText, ok := obj["error"].(string); ok && errText != "" {
+			return "failed", fmt.Errorf("%s", errText)
+		}
+	}
+	return "success", nil
 }
 
 // writeTools 需要审计日志的写操作工具集合
@@ -1061,12 +1167,14 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		return string(data)
 
 	case "get_tenant_info":
-		var tenant map[string]any
-		err := database.DB.Get(&tenant, "SELECT CAST(id AS CHAR) as id, CAST(name AS CHAR) as name, CAST(plan AS CHAR) as plan, CAST(status AS CHAR) as status, expires_at, max_users, created_at FROM tenants WHERE id = ?", tenantID)
+		tenants, err := queryMaps("SELECT CAST(id AS CHAR) as id, CAST(name AS CHAR) as name, CAST(plan AS CHAR) as plan, CAST(status AS CHAR) as status, expires_at, max_users, created_at FROM tenants WHERE id = ?", tenantID)
 		if err != nil {
 			return `{"error": "查询租户信息失败: ` + err.Error() + `"}`
 		}
-		data, _ := json.Marshal(tenant)
+		if len(tenants) == 0 {
+			return `{"error": "租户不存在"}`
+		}
+		data, _ := json.Marshal(tenants[0])
 		return string(data)
 
 	case "update_tenant":
@@ -1674,6 +1782,17 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 
 	tid := tenantID.(string)
 	requestStart := time.Now()
+	requestID := logger.GetRequestID(c)
+	if requestID == "" {
+		requestID = uuid.New().String()
+	}
+	logger.Info("chat", "chat stream started",
+		logger.Field("request_id", requestID),
+		logger.Field("tenant_id", tid),
+		logger.Field("user_id", userID),
+		logger.Field("messages", len(req.Messages)),
+		logger.Field("client_ip", c.ClientIP()),
+	)
 
 	// 设置SSE headers
 	c.Header("Content-Type", "text/event-stream")
@@ -1687,7 +1806,12 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	if permErr != nil || len(permissions) == 0 {
 		// 获取失败时给空工具列表（只能聊天，不能操作）
 		tools = []ToolDefinition{}
-		log.Printf("ChatStream: failed to get permissions for user %v, tools disabled: %v", userID, permErr)
+		logger.Warn("chat", "permissions load failed; tools disabled",
+			logger.Field("request_id", requestID),
+			logger.Field("tenant_id", tid),
+			logger.Field("user_id", userID),
+			logger.Field("error", fmt.Sprintf("%v", permErr)),
+		)
 	} else {
 		tools = getToolsForPermissions(permissions)
 	}
@@ -1735,7 +1859,15 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	for _, tool := range tools {
 		toolNames = append(toolNames, tool.Function.Name)
 	}
-	log.Printf("ChatStream: user=%v, tools=%d (mcp=%d, skill=%d), names=%v, hasWildcard=%v", userID.(string), len(tools), len(mcpToolDefs), len(skillToolDefs), toolNames, hasWildcard)
+	logger.Info("chat", "tools loaded",
+		logger.Field("request_id", requestID),
+		logger.Field("tenant_id", tid),
+		logger.Field("user_id", userID),
+		logger.Field("tools", len(tools)),
+		logger.Field("mcp_tools", len(mcpToolDefs)),
+		logger.Field("skills", len(skillToolDefs)),
+		logger.Field("has_wildcard", hasWildcard),
+	)
 
 	// 获取用户最新消息用于记忆检索
 	lastUserMsg := ""
@@ -1829,9 +1961,9 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		displayName = modelName
 	}
 	sendSSE(c, SSEEventModelInfo, map[string]string{
-		"model":       modelName,
+		"model":        modelName,
 		"display_name": displayName,
-		"provider":    providerName,
+		"provider":     providerName,
 	})
 
 	// 构建消息
@@ -1855,12 +1987,21 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 			"total_ms":   time.Since(requestStart).Milliseconds(),
 		})
 
-		// 调用模型（非流式，因为需要解析tool_calls）
-		response, err := h.callModelWithTools(tid, messages, tools)
+		// 调用模型（非流式，因为需要解析tool_calls）；等待期间持续发送 heartbeat
+		response, err := waitModelWithHeartbeat(c, requestStart, "thinking", fmt.Sprintf("正在思考...（第 %d 轮）", round+1), func() (*ModelResponse, error) {
+			return h.callModelWithTools(tid, messages, tools)
+		})
 		modelElapsed := time.Since(roundStart).Milliseconds()
 
 		if err != nil {
-			log.Printf("Chat model error: %v", err)
+			logger.Error("chat", "model call failed",
+				logger.Field("request_id", requestID),
+				logger.Field("tenant_id", tid),
+				logger.Field("user_id", userID),
+				logger.Field("round", round+1),
+				logger.Field("duration_ms", modelElapsed),
+				logger.Field("error", err.Error()),
+			)
 			sendSSE(c, SSEEventError, map[string]string{"message": "模型调用失败: " + err.Error()})
 			sendSSE(c, SSEEventDone, nil)
 			return
@@ -1869,9 +2010,12 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		// 记录模型 token 消耗
 		if response.InputTokens > 0 || response.OutputTokens > 0 {
 			uid := ""
-			if userID != nil { uid = userID.(string) }
-			RecordModelUsage(tid, uid, response.Provider, response.Model,
-				"/chat", response.InputTokens, response.OutputTokens, int(modelElapsed))
+			if userID != nil {
+				uid = userID.(string)
+			}
+			RecordModelUsageWithContext(tid, uid, response.Provider, response.Model,
+				"/chat", response.InputTokens, response.OutputTokens, response.CachedTokens, int(modelElapsed),
+				"ai_assistant", "AI助手", "assistant", "", requestID)
 		}
 
 		// 检查是否有工具调用
@@ -1881,7 +2025,14 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 			for _, tc := range response.ToolCalls {
 				tcNames = append(tcNames, tc.Function.Name)
 			}
-			log.Printf("ChatStream: model called tools: %v", tcNames)
+			logger.Info("chat", "model requested tools",
+				logger.Field("request_id", requestID),
+				logger.Field("tenant_id", tid),
+				logger.Field("user_id", userID),
+				logger.Field("round", round+1),
+				logger.Field("tool_count", len(response.ToolCalls)),
+				logger.Field("tools", tcNames),
+			)
 			// 添加assistant消息（带tool_calls）
 			assistantMsg := modelservice.Message{Role: "assistant", Content: response.Content}
 			for _, tc := range response.ToolCalls {
@@ -1925,8 +2076,25 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 
 				var args map[string]any
 				json.Unmarshal([]byte(tc.Function.Arguments), &args)
-				result := h.executeTool(tid, userID.(string), tc.Function.Name, args)
+				toolMessage := "正在" + getToolDisplayName(tc.Function.Name) + "..."
+				result, toolWaitErr := waitToolWithHeartbeat(c, requestStart, "tool_calling", toolMessage, func() string {
+					return h.executeTool(tid, userID.(string), tc.Function.Name, args)
+				})
+				if toolWaitErr != nil {
+					logger.Warn("chat", "tool execution interrupted",
+						logger.Field("request_id", requestID),
+						logger.Field("tenant_id", tid),
+						logger.Field("user_id", userID),
+						logger.Field("tool", tc.Function.Name),
+						logger.Field("error", toolWaitErr.Error()),
+					)
+					return
+				}
 				toolElapsed := time.Since(toolStart).Milliseconds()
+				resourceType, resourceID, resourceName := classifyCalledTool(tc.Function.Name)
+				status, resultErr := toolCallStatusFromResult(result)
+				RecordToolCallUsage(tid, userID.(string), resourceType, resourceID, resourceName,
+					"ai_assistant", status, int(toolElapsed), requestID, resultErr)
 
 				// 发送工具结果事件
 				sendSSE(c, SSEEventTool, map[string]any{
@@ -2061,6 +2229,7 @@ type ModelResponse struct {
 	ToolCalls    []ToolCall `json:"tool_calls"`
 	InputTokens  int        `json:"input_tokens"`
 	OutputTokens int        `json:"output_tokens"`
+	CachedTokens int        `json:"cached_tokens"`
 	Provider     string     `json:"provider"`
 	Model        string     `json:"model"`
 }
@@ -2110,7 +2279,7 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 			continue
 		}
 
-var chatResp struct {
+		var chatResp struct {
 			Choices []struct {
 				Message struct {
 					Role      string     `json:"role"`
@@ -2119,9 +2288,12 @@ var chatResp struct {
 				} `json:"message"`
 			} `json:"choices"`
 			Usage struct {
-				PromptTokens     json.Number `json:"prompt_tokens"`
-				CompletionTokens json.Number `json:"completion_tokens"`
-				TotalTokens      json.Number `json:"total_tokens"`
+				PromptTokens        json.Number `json:"prompt_tokens"`
+				CompletionTokens    json.Number `json:"completion_tokens"`
+				TotalTokens         json.Number `json:"total_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens json.Number `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 
@@ -2133,6 +2305,16 @@ var chatResp struct {
 			continue
 		}
 		resp.Body.Close()
+
+		// 调试：写原始字节到文件
+		os.WriteFile("/tmp/api response dump.bin", respBody, 0644)
+		log.Printf("Raw response first 20 bytes: %v", respBody[:min(20, len(respBody))])
+
+		// 先检查 BOM (必须在 gzip 检查之前)
+		if len(respBody) >= 3 && respBody[0] == 0xEF && respBody[1] == 0xBB && respBody[2] == 0xBF {
+			log.Printf("BOM detected, stripping")
+			respBody = respBody[3:]
+		}
 
 		// 检查并处理 gzip 压缩
 		if resp.Header.Get("Content-Encoding") == "gzip" || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/gzip") {
@@ -2148,8 +2330,9 @@ var chatResp struct {
 			}
 		}
 
-		// 检查 BOM
+		// 再次检查 BOM (gzip 解压后可能还有 BOM)
 		if len(respBody) >= 3 && respBody[0] == 0xEF && respBody[1] == 0xBB && respBody[2] == 0xBF {
+			log.Printf("BOM detected after gzip, stripping")
 			respBody = respBody[3:]
 		}
 
@@ -2173,6 +2356,7 @@ var chatResp struct {
 			ToolCalls:    chatResp.Choices[0].Message.ToolCalls,
 			InputTokens:  0,
 			OutputTokens: 0,
+			CachedTokens: 0,
 			Provider:     config.ProviderName,
 			Model:        config.Model,
 		}
@@ -2181,6 +2365,9 @@ var chatResp struct {
 		}
 		if n, err := chatResp.Usage.CompletionTokens.Int64(); err == nil {
 			response.OutputTokens = int(n)
+		}
+		if n, err := chatResp.Usage.PromptTokensDetails.CachedTokens.Int64(); err == nil {
+			response.CachedTokens = int(n)
 		}
 		return &response, nil
 	}

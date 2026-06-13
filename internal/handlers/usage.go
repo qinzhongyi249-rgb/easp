@@ -20,21 +20,23 @@ func NewUsageHandler() *UsageHandler {
 // UsageStats 使用量统计响应
 type UsageStats struct {
 	// API 调用统计
-	TodayAPICalls   int `json:"today_api_calls"`
-	MonthAPICalls   int `json:"month_api_calls"`
-	DailyQuota      int `json:"daily_quota"`       // 0=不限
-	MonthlyQuota    int `json:"monthly_quota"`      // 0=不限
-	RateLimit       int `json:"rate_limit"`         // 每分钟，0=不限
+	TodayAPICalls int `json:"today_api_calls"`
+	MonthAPICalls int `json:"month_api_calls"`
+	DailyQuota    int `json:"daily_quota"`   // 0=不限
+	MonthlyQuota  int `json:"monthly_quota"` // 0=不限
+	RateLimit     int `json:"rate_limit"`    // 每分钟，0=不限
 
 	// Token 消耗统计
 	TodayInputTokens  int `json:"today_input_tokens"`
 	TodayOutputTokens int `json:"today_output_tokens"`
+	TodayCachedTokens int `json:"today_cached_tokens"`
 	TodayTotalTokens  int `json:"today_total_tokens"`
 	MonthInputTokens  int `json:"month_input_tokens"`
 	MonthOutputTokens int `json:"month_output_tokens"`
+	MonthCachedTokens int `json:"month_cached_tokens"`
 	MonthTotalTokens  int `json:"month_total_tokens"`
-	DailyTokenQuota   int `json:"daily_token_quota"`    // 0=不限
-	MonthlyTokenQuota int `json:"monthly_token_quota"`  // 0=不限
+	DailyTokenQuota   int `json:"daily_token_quota"`   // 0=不限
+	MonthlyTokenQuota int `json:"monthly_token_quota"` // 0=不限
 
 	// 按模型分组的 token 消耗
 	ModelUsage []ModelUsageStats `json:"model_usage"`
@@ -50,6 +52,7 @@ type ModelUsageStats struct {
 	MonthCalls   int    `json:"month_calls"`
 	InputTokens  int    `json:"month_input_tokens"`
 	OutputTokens int    `json:"month_output_tokens"`
+	CachedTokens int    `json:"month_cached_tokens"`
 }
 
 // GetUsageStats 获取租户使用量统计
@@ -86,15 +89,15 @@ func (h *UsageHandler) GetUsageStats(c *gin.Context) {
 
 	// Token 消耗统计（当日）
 	database.DB.QueryRow(`
-		SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_tokens), 0)
+		SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(total_tokens), 0)
 		FROM model_usage WHERE tenant_id = ? AND DATE(created_at) = ?`, tenantID, today).
-		Scan(&stats.TodayInputTokens, &stats.TodayOutputTokens, &stats.TodayTotalTokens)
+		Scan(&stats.TodayInputTokens, &stats.TodayOutputTokens, &stats.TodayCachedTokens, &stats.TodayTotalTokens)
 
 	// Token 消耗统计（当月）
 	database.DB.QueryRow(`
-		SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_tokens), 0)
+		SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(total_tokens), 0)
 		FROM model_usage WHERE tenant_id = ? AND created_at >= ?`, tenantID, monthStart).
-		Scan(&stats.MonthInputTokens, &stats.MonthOutputTokens, &stats.MonthTotalTokens)
+		Scan(&stats.MonthInputTokens, &stats.MonthOutputTokens, &stats.MonthCachedTokens, &stats.MonthTotalTokens)
 
 	// 按模型分组统计
 	rows, err := database.DB.Query(`
@@ -104,7 +107,8 @@ func (h *UsageHandler) GetUsageStats(c *gin.Context) {
 		       SUM(CASE WHEN DATE(created_at) = ? THEN 1 ELSE 0 END) as today_calls,
 		       COUNT(*) as month_calls,
 		       SUM(input_tokens) as month_input_tokens,
-		       SUM(output_tokens) as month_output_tokens
+		       SUM(output_tokens) as month_output_tokens,
+		       SUM(cached_tokens) as month_cached_tokens
 		FROM model_usage
 		WHERE tenant_id = ? AND created_at >= ?
 		GROUP BY model_provider, model_name
@@ -114,7 +118,7 @@ func (h *UsageHandler) GetUsageStats(c *gin.Context) {
 		for rows.Next() {
 			var m ModelUsageStats
 			if err := rows.Scan(&m.Provider, &m.Model, &m.TodayTokens, &m.MonthTokens,
-				&m.TodayCalls, &m.MonthCalls, &m.InputTokens, &m.OutputTokens); err == nil {
+				&m.TodayCalls, &m.MonthCalls, &m.InputTokens, &m.OutputTokens, &m.CachedTokens); err == nil {
 				stats.ModelUsage = append(stats.ModelUsage, m)
 			}
 		}
@@ -141,13 +145,45 @@ func RecordAPIUsage(tenantID, userID, endpoint, method string, statusCode, laten
 
 // RecordModelUsage 记录模型调用（含 token 消耗）
 func RecordModelUsage(tenantID, userID, provider, model, endpoint string, inputTokens, outputTokens, latencyMs int) {
+	RecordModelUsageWithContext(tenantID, userID, provider, model, endpoint, inputTokens, outputTokens, 0, latencyMs,
+		"unknown", "", "", "", "")
+}
+
+// RecordModelUsageWithContext 记录模型调用（含来源、资源和链路ID）
+func RecordModelUsageWithContext(tenantID, userID, provider, model, endpoint string, inputTokens, outputTokens, cachedTokens, latencyMs int, source, sourceName, resourceType, resourceID, requestID string) {
+	if source == "" {
+		source = "unknown"
+	}
 	go func() {
 		_, err := database.DB.Exec(`
-			INSERT INTO model_usage (tenant_id, user_id, model_provider, model_name, input_tokens, output_tokens, total_tokens, latency_ms, endpoint, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-			tenantID, userID, provider, model, inputTokens, outputTokens, inputTokens+outputTokens, latencyMs, endpoint)
+			INSERT INTO model_usage (tenant_id, user_id, model_provider, model_name, input_tokens, output_tokens, cached_tokens, total_tokens, latency_ms, endpoint, source, source_name, resource_type, resource_id, request_id, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+			tenantID, userID, provider, model, inputTokens, outputTokens, cachedTokens, inputTokens+outputTokens, latencyMs, endpoint, source, sourceName, resourceType, resourceID, requestID)
 		if err != nil {
-			log.Printf("RecordModelUsage failed: %v", err)
+			log.Printf("RecordModelUsageWithContext failed: %v", err)
+		}
+	}()
+}
+
+// RecordToolCallUsage 记录 MCP工具 / Skill / 内置工具调用次数和耗时
+func RecordToolCallUsage(tenantID, userID, resourceType, resourceID, resourceName, source, status string, latencyMs int, requestID string, callErr error) {
+	if status == "" {
+		status = "success"
+	}
+	var errorMessage any
+	if callErr != nil {
+		if status == "success" {
+			status = "failed"
+		}
+		errorMessage = callErr.Error()
+	}
+	go func() {
+		_, err := database.DB.Exec(`
+			INSERT INTO tool_call_usage (tenant_id, user_id, resource_type, resource_id, resource_name, source, status, latency_ms, request_id, error_message, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+			tenantID, userID, resourceType, resourceID, resourceName, source, status, latencyMs, requestID, errorMessage)
+		if err != nil {
+			log.Printf("RecordToolCallUsage failed: %v", err)
 		}
 	}()
 }

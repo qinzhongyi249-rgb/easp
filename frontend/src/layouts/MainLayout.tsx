@@ -16,6 +16,7 @@ import {
   MenuUnfoldOutlined,
   KeyOutlined,
   RobotOutlined,
+  BarChartOutlined,
   MenuOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
@@ -87,6 +88,7 @@ const MainLayout: React.FC = () => {
     ...(hasTool('model-config') ? [{ key: '/model-config', icon: <SettingOutlined />, label: '模型配置' }] : []),
     ...(hasTool('sso-config') ? [{ key: '/sso-config', icon: <KeyOutlined />, label: 'SSO配置' }] : []),
     { key: '/assistant', icon: <RobotOutlined />, label: 'AI 助手' },
+    ...(hasTool('usage-analytics') ? [{ key: '/usage-analytics', icon: <BarChartOutlined />, label: '用量分析' }] : []),
     ...(hasTool('audit-logs') ? [{ key: '/audit-logs', icon: <FileTextOutlined />, label: '审计日志' }] : []),
     ...(hasTool('api-keys') ? [{ key: '/api-keys', icon: <KeyOutlined />, label: 'API Key' }] : []),
   ];
