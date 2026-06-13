@@ -3,7 +3,8 @@ import { Input, Button, Typography, Space, Avatar, Tag, Tooltip, Badge } from 'a
 import {
   SendOutlined, RobotOutlined, UserOutlined, PlusOutlined,
   LoadingOutlined, CheckCircleOutlined, CloseOutlined,
-  CustomerServiceOutlined,
+  CustomerServiceOutlined, ClockCircleOutlined, ThunderboltOutlined,
+  ToolOutlined, BranchesOutlined, DownOutlined,
 } from '@ant-design/icons';
 import { MarkdownRenderer, MARKDOWN_CSS } from '../utils/markdown';
 
@@ -16,11 +17,29 @@ interface ModelInfo {
   provider: string;
 }
 
+interface TraceStep {
+  stage: string;
+  message: string;
+  elapsed_ms?: number;
+  stage_ms?: number;
+  tool_name?: string;
+  tool_index?: number;
+  tool_total?: number;
+  timestamp: number;
+}
+
+interface ToolResult {
+  name: string;
+  elapsed_ms: number;
+}
+
 interface DisplayMessage {
   role: 'user' | 'assistant' | 'status';
   content: string;
   isStreaming?: boolean;
   modelInfo?: ModelInfo;
+  trace?: TraceStep[];
+  toolResults?: ToolResult[];
   totalMs?: number;
 }
 
@@ -28,6 +47,100 @@ interface FloatingAssistantProps {
   tenantId: string;
   userId?: string;
 }
+
+const fmtMs = (ms?: number): string => {
+  if (ms === undefined || ms === null || isNaN(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+};
+
+const stageConfig: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+  thinking: { icon: <LoadingOutlined />, color: '#1677ff', label: '模型思考' },
+  plan: { icon: <BranchesOutlined />, color: '#722ed1', label: '工具规划' },
+  tool_calling: { icon: <ToolOutlined />, color: '#fa8c16', label: '执行工具' },
+  generating: { icon: <ThunderboltOutlined />, color: '#52c41a', label: '生成回答' },
+};
+
+const TraceTimeline: React.FC<{
+  trace: TraceStep[];
+  toolResults: ToolResult[];
+  totalMs?: number;
+  isStreaming?: boolean;
+}> = ({ trace, toolResults, totalMs, isStreaming }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (expanded || !isStreaming || totalMs !== undefined) return;
+    const timer = setInterval(() => setTick(t => t + 1), 200);
+    return () => clearInterval(timer);
+  }, [expanded, isStreaming, totalMs]);
+
+  const uniqueSteps: TraceStep[] = [];
+  const seen = new Set<string>();
+  for (let i = trace.length - 1; i >= 0; i--) {
+    const key = trace[i].stage + (trace[i].tool_name || '') + (trace[i].tool_index || '');
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueSteps.unshift(trace[i]);
+    }
+  }
+
+  if (uniqueSteps.length === 0 && toolResults.length === 0) return null;
+
+  const firstTimestamp = uniqueSteps.length > 0 && uniqueSteps[0].timestamp ? uniqueSteps[0].timestamp : Date.now();
+  const liveElapsed = totalMs ?? Math.max(0, Date.now() - firstTimestamp);
+  const lastStep = uniqueSteps[uniqueSteps.length - 1];
+  const summaryText = lastStep?.stage === 'generating' ? '生成中...' :
+    lastStep?.stage === 'tool_calling' ? `执行工具 ${lastStep.tool_index || 1}/${lastStep.tool_total || 1}` :
+    lastStep?.message || '处理中...';
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', padding: '2px 0' }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? <DownOutlined style={{ fontSize: 10 }} /> : <DownOutlined style={{ fontSize: 10, transform: 'rotate(-90deg)' }} />}
+        <ClockCircleOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {summaryText} · {fmtMs(liveElapsed)}
+        </Text>
+      </div>
+      {expanded && (
+        <div style={{ paddingLeft: 16, borderLeft: '2px solid #f0f0f0', marginLeft: 4 }}>
+          {uniqueSteps.map((step, i) => {
+            const config = stageConfig[step.stage] || stageConfig.thinking;
+            const running = isStreaming && i === uniqueSteps.length - 1 && step.stage_ms === undefined;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                <span style={{ color: config.color }}>{config.icon}</span>
+                <Text style={{ fontSize: 12, flex: 1 }}>
+                  {step.tool_name ? `${config.label}: ${step.tool_name}` : config.label}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                  {step.stage_ms !== undefined ? fmtMs(step.stage_ms) : running ? '执行中...' : ''}
+                </Text>
+              </div>
+            );
+          })}
+          {toolResults.length > 0 && (
+            <div style={{ marginTop: 4, padding: '4px 8px', background: '#f6f6f6', borderRadius: 4 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                工具调用: {toolResults.map(t => `${t.name}(${fmtMs(t.elapsed_ms)})`).join(', ')}
+              </Text>
+            </div>
+          )}
+          {totalMs !== undefined && (
+            <div style={{ marginTop: 4 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>总耗时: {fmtMs(totalMs)}</Text>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // localStorage 工具函数
 const getChatKey = (userId: string, tenantId: string) =>
@@ -273,17 +386,25 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
       let buffer = '';
       let currentEvent = '';
       let currentContent = '';
+      let traceSteps: TraceStep[] = [];
+      let toolResults: ToolResult[] = [];
       let modelInfo: ModelInfo | null = null;
 
-      const updateStatus = (content: string) => {
+      const updateStatus = (content: string, trace?: TraceStep[]) => {
         setMessages(prev => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
+          const nextStatus: DisplayMessage = {
+            role: 'status',
+            content,
+            trace: trace || traceSteps,
+            toolResults,
+          };
           if (last?.role === 'status') {
-            updated[updated.length - 1] = { ...last, content };
+            updated[updated.length - 1] = { ...last, ...nextStatus };
             return updated;
           }
-          return [...updated, { role: 'status', content }];
+          return [...updated, nextStatus];
         });
       };
 
@@ -318,53 +439,64 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
 
               case 'status':
               case 'heartbeat':
-                updateStatus(data.message || '处理中...');
+              case 'trace': {
+                traceSteps = [...traceSteps, { ...data, timestamp: data.timestamp || Date.now() }];
+                updateStatus(data.message || '处理中...', traceSteps);
                 break;
+              }
 
               case 'tool':
               case 'tool_result':
-                updateStatus(`✓ ${data.name} 完成`);
+                toolResults = [...toolResults, { name: data.name, elapsed_ms: data.elapsed_ms }];
+                updateStatus(`✓ ${data.name} 完成`, traceSteps);
                 break;
 
-              case 'delta':
-                currentContent += data.content || '';
+              case 'delta': {
+                const piece = data.content || '';
+                if (!piece) break;
+                currentContent += piece;
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
                   const lastMsg = filtered[filtered.length - 1];
+                  const nextMsg: DisplayMessage = {
+                    role: 'assistant',
+                    content: currentContent,
+                    isStreaming: true,
+                    modelInfo: modelInfo || undefined,
+                    trace: traceSteps.length > 0 ? traceSteps : undefined,
+                    toolResults: toolResults.length > 0 ? toolResults : undefined,
+                  };
                   if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
                     const newMsgs = [...filtered];
-                    newMsgs[newMsgs.length - 1] = {
-                      role: 'assistant', content: currentContent,
-                      isStreaming: true, modelInfo: modelInfo || undefined,
-                    };
+                    newMsgs[newMsgs.length - 1] = { ...lastMsg, ...nextMsg };
                     return newMsgs;
                   }
-                  return [...filtered, {
-                    role: 'assistant', content: currentContent,
-                    isStreaming: true, modelInfo: modelInfo || undefined,
-                  }];
+                  return [...filtered, nextMsg];
                 });
                 break;
+              }
 
               case 'done': {
                 const totalMs = data?.total_ms;
+                const finalContent = currentContent || '处理已完成，但模型没有返回可展示内容。请稍后重试或简化问题。';
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
-                  if (!currentContent) return filtered;
                   const lastMsg = filtered[filtered.length - 1];
+                  const nextMsg: DisplayMessage = {
+                    role: 'assistant',
+                    content: finalContent,
+                    isStreaming: false,
+                    totalMs,
+                    modelInfo: modelInfo || undefined,
+                    trace: traceSteps.length > 0 ? traceSteps : undefined,
+                    toolResults: toolResults.length > 0 ? toolResults : undefined,
+                  };
                   if (lastMsg && lastMsg.role === 'assistant') {
                     const newMsgs = [...filtered];
-                    newMsgs[newMsgs.length - 1] = {
-                      ...lastMsg, isStreaming: false, totalMs,
-                      modelInfo: modelInfo || undefined,
-                    };
+                    newMsgs[newMsgs.length - 1] = { ...lastMsg, ...nextMsg };
                     return newMsgs;
                   }
-                  return [...filtered, {
-                    role: 'assistant', content: currentContent,
-                    isStreaming: false, totalMs,
-                    modelInfo: modelInfo || undefined,
-                  }];
+                  return [...filtered, nextMsg];
                 });
                 if (!open) setUnread(u => u + 1);
                 currentContent = '';
@@ -374,7 +506,12 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
               case 'error':
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
-                  return [...filtered, { role: 'assistant', content: `❌ ${data.message}` }];
+                  return [...filtered, {
+                    role: 'assistant',
+                    content: `❌ ${data.message}`,
+                    trace: traceSteps.length > 0 ? traceSteps : undefined,
+                    toolResults: toolResults.length > 0 ? toolResults : undefined,
+                  }];
                 });
                 break;
             }
@@ -526,17 +663,34 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                       fontSize: 13,
                     }}>
                       {msg.role === 'status' ? (
-                        <Space size={6}>
-                          <LoadingOutlined style={{ color: '#faad14', fontSize: 12 }} />
-                          <Text style={{ color: '#8c6e00', fontSize: 12 }}>{msg.content}</Text>
-                        </Space>
+                        <div>
+                          {msg.trace && msg.trace.length > 0 && (
+                            <TraceTimeline
+                              trace={msg.trace}
+                              toolResults={msg.toolResults || []}
+                              isStreaming={true}
+                            />
+                          )}
+                          <Space size={6}>
+                            <LoadingOutlined style={{ color: '#faad14', fontSize: 12 }} />
+                            <Text style={{ color: '#8c6e00', fontSize: 12 }}>{msg.content}</Text>
+                          </Space>
+                        </div>
                       ) : msg.role === 'assistant' ? (
                         <>
+                          {msg.trace && msg.trace.length > 0 && (
+                            <TraceTimeline
+                              trace={msg.trace}
+                              toolResults={msg.toolResults || []}
+                              totalMs={msg.totalMs}
+                              isStreaming={msg.isStreaming}
+                            />
+                          )}
                           <MarkdownRenderer content={msg.content} compact />
-                          {msg.isStreaming && <span style={{ color: '#1677ff', fontWeight: 'bold', animation: 'blink 0.8s infinite' }}>▊</span>}
+                          {msg.isStreaming && msg.content && <span style={{ color: '#1677ff', fontWeight: 'bold', animation: 'blink 0.8s infinite' }}>▊</span>}
                           {!msg.isStreaming && msg.totalMs !== undefined && (
                             <div style={{ marginTop: 4, fontSize: 11, color: '#999', fontFamily: 'monospace' }}>
-                              {msg.totalMs < 1000 ? `${msg.totalMs}ms` : `${(msg.totalMs / 1000).toFixed(1)}s`}
+                              总耗时 {fmtMs(msg.totalMs)}
                             </div>
                           )}
                         </>
