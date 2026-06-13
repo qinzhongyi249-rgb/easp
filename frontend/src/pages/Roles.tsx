@@ -11,16 +11,20 @@ import { useAuth } from '../contexts/AuthContext';
 const { Title, Text } = Typography;
 interface LayoutContext { currentTenant: string; }
 
+// 与 MainLayout.tsx 中 hasTool(...) 控制的菜单权限保持一致。
+// 不包含：dashboard（所有登录用户可见）、tenants（仅系统级 isAdmin）、assistant（所有登录用户可见）。
 const TOOL_OPTIONS = [
+  { label: '用户管理', value: 'users', desc: '管理租户下的用户' },
+  { label: '角色管理', value: 'roles', desc: '管理租户下的角色' },
   { label: '连接器管理', value: 'connectors', desc: '创建、编辑、删除连接器' },
   { label: 'MCP工具管理', value: 'mcp-tools', desc: '管理MCP工具配置' },
   { label: '技能管理', value: 'skills', desc: '创建和执行技能' },
   { label: '记忆管理', value: 'memory', desc: '管理记忆池和向量记忆' },
   { label: '模型配置', value: 'model-config', desc: '配置AI模型和提供商' },
-  { label: '用户管理', value: 'users', desc: '管理租户下的用户' },
-  { label: '角色管理', value: 'roles', desc: '管理租户下的角色' },
-  { label: '审计日志', value: 'audit-logs', desc: '查看操作审计日志' },
   { label: 'SSO配置', value: 'sso-config', desc: '配置单点登录' },
+  { label: '用量分析', value: 'usage-analytics', desc: '查看租户调用量、Token消耗和配额使用情况' },
+  { label: '审计日志', value: 'audit-logs', desc: '查看操作审计日志' },
+  { label: 'API Key', value: 'api-keys', desc: '管理嵌入式聊天/API访问密钥' },
 ];
 
 const DATA_SCOPE_OPTIONS = [
@@ -294,8 +298,16 @@ const Roles: React.FC = () => {
                     <Text type="secondary" style={{ fontSize: 12 }}>{o.desc}</Text>
                   </div>
                 ),
+                title: o.label,
                 value: o.value,
+                searchText: `${o.label} ${o.desc} ${o.value}`,
               }))}
+              optionLabelProp="title"
+              filterOption={(input, option) =>
+                String(option?.searchText || option?.value || '')
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
+              }
               maxTagCount="responsive"
               allowClear
             />

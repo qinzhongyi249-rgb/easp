@@ -286,11 +286,15 @@
 | MCP工具 | /mcp-tools | MCP工具管理 |
 | Skill | /skills | Skill管理 + 执行测试 |
 | 记忆管理 | /memory | 记忆系统管理 |
-| 模型配置 | /model-configs | 模型提供商+配置管理 |
+| 模型配置 | /model-config | 模型提供商+配置管理 |
 | SSO配置 | /sso-config | SSO配置管理 |
 | AI助手 | /assistant | AI对话助手 |
+| 用量分析 | /usage-analytics | API调用量、Token消耗和配额统计 |
 | 审计日志 | /audit-logs | 查看审计日志 |
+| API Key | /api-keys | 嵌入式聊天/API访问密钥管理 |
 | 租户登录 | /sso/:tenantId | SSO+标准登录 |
+
+**菜单权限 key（roles.tools JSON数组）**：`users`、`roles`、`connectors`、`mcp-tools`、`skills`、`memory`、`model-config`、`sso-config`、`usage-analytics`、`audit-logs`、`api-keys`。`dashboard`、`assistant`默认登录可见，`tenants`仅系统级超级管理员可见，`*`表示全部菜单权限。
 
 ---
 
