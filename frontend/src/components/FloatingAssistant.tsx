@@ -390,21 +390,16 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
       let toolResults: ToolResult[] = [];
       let modelInfo: ModelInfo | null = null;
 
-      const updateStatus = (content: string, trace?: TraceStep[]) => {
+      const appendStatus = (content: string, step?: TraceStep, totalMs?: number) => {
         setMessages(prev => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
           const nextStatus: DisplayMessage = {
             role: 'status',
             content,
-            trace: trace || traceSteps,
+            trace: step ? [step] : undefined,
             toolResults,
+            totalMs,
           };
-          if (last?.role === 'status') {
-            updated[updated.length - 1] = { ...last, ...nextStatus };
-            return updated;
-          }
-          return [...updated, nextStatus];
+          return [...prev, nextStatus];
         });
       };
 
@@ -440,15 +435,23 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
               case 'status':
               case 'heartbeat':
               case 'trace': {
-                traceSteps = [...traceSteps, { ...data, timestamp: data.timestamp || Date.now() }];
-                updateStatus(data.message || '处理中...', traceSteps);
+                const step: TraceStep = { ...data, timestamp: data.timestamp || Date.now() };
+                traceSteps = [...traceSteps, step];
+                appendStatus(data.message || '处理中...', step, data.total_ms ?? data.elapsed_ms);
                 break;
               }
 
               case 'tool':
               case 'tool_result':
                 toolResults = [...toolResults, { name: data.name, elapsed_ms: data.elapsed_ms }];
-                updateStatus(`✓ ${data.name} 完成`, traceSteps);
+                appendStatus(`✓ ${data.name} 完成`, {
+                  stage: 'tool_calling',
+                  message: `✓ ${data.name} 完成`,
+                  tool_name: data.name,
+                  stage_ms: data.elapsed_ms,
+                  elapsed_ms: data.elapsed_ms,
+                  timestamp: Date.now(),
+                }, data.total_ms);
                 break;
 
               case 'delta': {
@@ -456,8 +459,6 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                 if (!piece) break;
                 currentContent += piece;
                 setMessages(prev => {
-                  const filtered = prev.filter(m => m.role !== 'status');
-                  const lastMsg = filtered[filtered.length - 1];
                   const nextMsg: DisplayMessage = {
                     role: 'assistant',
                     content: currentContent,
@@ -466,12 +467,13 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
                     toolResults: toolResults.length > 0 ? toolResults : undefined,
                   };
-                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
-                    const newMsgs = [...filtered];
-                    newMsgs[newMsgs.length - 1] = { ...lastMsg, ...nextMsg };
+                  const streamingIndex = prev.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
+                  if (streamingIndex >= 0) {
+                    const newMsgs = [...prev];
+                    newMsgs[streamingIndex] = { ...newMsgs[streamingIndex], ...nextMsg };
                     return newMsgs;
                   }
-                  return [...filtered, nextMsg];
+                  return [...prev, nextMsg];
                 });
                 break;
               }
@@ -480,8 +482,6 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                 const totalMs = data?.total_ms;
                 const finalContent = currentContent || '处理已完成，但模型没有返回可展示内容。请稍后重试或简化问题。';
                 setMessages(prev => {
-                  const filtered = prev.filter(m => m.role !== 'status');
-                  const lastMsg = filtered[filtered.length - 1];
                   const nextMsg: DisplayMessage = {
                     role: 'assistant',
                     content: finalContent,
@@ -491,12 +491,13 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
                     toolResults: toolResults.length > 0 ? toolResults : undefined,
                   };
-                  if (lastMsg && lastMsg.role === 'assistant') {
-                    const newMsgs = [...filtered];
-                    newMsgs[newMsgs.length - 1] = { ...lastMsg, ...nextMsg };
+                  const streamingIndex = prev.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
+                  if (streamingIndex >= 0) {
+                    const newMsgs = [...prev];
+                    newMsgs[streamingIndex] = { ...newMsgs[streamingIndex], ...nextMsg };
                     return newMsgs;
                   }
-                  return [...filtered, nextMsg];
+                  return [...prev, nextMsg];
                 });
                 if (!open) setUnread(u => u + 1);
                 currentContent = '';
@@ -505,8 +506,7 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
 
               case 'error':
                 setMessages(prev => {
-                  const filtered = prev.filter(m => m.role !== 'status');
-                  return [...filtered, {
+                  return [...prev, {
                     role: 'assistant',
                     content: `❌ ${data.message}`,
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
@@ -522,8 +522,7 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
       if ((err as Error).name === 'AbortError') return;
       const e = err as { message?: string };
       setMessages(prev => {
-        const filtered = prev.filter(m => m.role !== 'status');
-        return [...filtered, { role: 'assistant', content: `❌ 请求失败: ${e.message || '未知错误'}` }];
+        return [...prev, { role: 'assistant', content: `❌ 请求失败: ${e.message || '未知错误'}` }];
       });
     } finally {
       setSending(false);

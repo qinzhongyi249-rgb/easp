@@ -31,6 +31,23 @@ import (
 // 规则：1) 必须以字母或下划线开头 2) 只能包含字母数字._:- 3) 最大 128 字符
 // 中文/特殊字符会被替换为下划线，连续的下划线会被合并
 var toolNameRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.:-]{0,127}$`)
+var skillIDPrefixRegex = regexp.MustCompile(`^[a-f0-9]{8}$`)
+
+func makeSkillToolName(sk models.Skill) string {
+	idPrefix := strings.ReplaceAll(sk.ID, "-", "")
+	if len(idPrefix) > 8 {
+		idPrefix = idPrefix[:8]
+	}
+	safeName := sanitizeToolName(sk.Name)
+	toolName := "skill_" + idPrefix + "_" + safeName
+	if len(toolName) > 128 {
+		toolName = toolName[:128]
+	}
+	if !toolNameRegex.MatchString(toolName) {
+		toolName = "skill_" + idPrefix
+	}
+	return toolName
+}
 
 func sanitizeToolName(name string) string {
 	// 如果已经符合规范，直接返回
@@ -424,22 +441,7 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 
 		log.Printf("loadSkillToolDefinitions: loaded skill id=%s, name=%s", sk.ID, sk.Name)
 
-		// 使用技能 ID 的短前缀 + 名称，确保唯一性
-		// 取 ID 的前 8 个字符（去掉连字符）作为前缀
-		idPrefix := strings.ReplaceAll(sk.ID, "-", "")[:8]
-		safeName := sanitizeToolName(sk.Name)
-		toolName := "skill_" + idPrefix + "_" + safeName
-
-		// 确保工具名符合 Gemini 规范（最大 128 字符）
-		if len(toolName) > 128 {
-			toolName = toolName[:128]
-		}
-
-		// 验证工具名
-		if !toolNameRegex.MatchString(toolName) {
-			log.Printf("loadSkillToolDefinitions: invalid tool name '%s' for skill %s, using fallback", toolName, sk.ID)
-			toolName = "skill_" + idPrefix
-		}
+		toolName := makeSkillToolName(sk)
 
 		params := map[string]any{
 			"type":       "object",
@@ -1661,12 +1663,45 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 	default:
 		// 检查是否是Skill调用（名称以 skill_ 开头）- 智能路由
 		if strings.HasPrefix(toolName, "skill_") {
-			skillName := strings.TrimPrefix(toolName, "skill_")
-			// 查找Skill
+			skillKey := strings.TrimPrefix(toolName, "skill_")
+			// loadSkillToolDefinitions 暴露给模型的工具名格式为 skill_{8位ID前缀}_{安全名称}。
+			// 执行时按完整生成名反查，并二次校验用户权限，避免模型返回未暴露的函数名时越权执行。
 			var sk models.Skill
-			err := database.DB.Get(&sk, "SELECT * FROM skills WHERE name = ? AND tenant_id = ? AND status = 'active'", skillName, tenantID)
-			if err != nil {
-				return `{"error": "技能不存在或未激活: ` + skillName + `"}`
+			var err error
+			isPrefixedSkillTool := false
+			if idx := strings.Index(skillKey, "_"); idx == 8 {
+				idPrefix := skillKey[:idx]
+				isPrefixedSkillTool = skillIDPrefixRegex.MatchString(idPrefix)
+				if isPrefixedSkillTool {
+					var candidates []models.Skill
+					err = database.DB.Select(&candidates, "SELECT * FROM skills WHERE REPLACE(id, '-', '') LIKE ? AND tenant_id = ? AND status = 'active'", idPrefix+"%", tenantID)
+					if err == nil {
+						for _, candidate := range candidates {
+							if makeSkillToolName(candidate) == toolName {
+								sk = candidate
+								break
+							}
+						}
+						if sk.ID == "" {
+							err = fmt.Errorf("skill tool name mismatch")
+						}
+					}
+				}
+			}
+			if !isPrefixedSkillTool && (err != nil || sk.ID == "") {
+				// 兼容旧格式：skill_{name}。前缀格式必须完整匹配生成名，不再回退到名称查找。
+				err = database.DB.Get(&sk, "SELECT * FROM skills WHERE name = ? AND tenant_id = ? AND status = 'active'", skillKey, tenantID)
+			}
+			if err != nil || sk.ID == "" {
+				data, _ := json.Marshal(map[string]any{"error": "技能不存在或未激活: " + skillKey})
+				return string(data)
+			}
+			if userID != "" {
+				_, allowedSkillIDs, hasWildcard := getUserAllowedMCPSkills(userID)
+				if !hasWildcard && !allowedSkillIDs[sk.ID] {
+					data, _ := json.Marshal(map[string]any{"error": "无权执行技能: " + sk.Name})
+					return string(data)
+				}
 			}
 			// 创建MCP caller
 			mcpCaller := func(ctx context.Context, toolName string, arguments json.RawMessage) (map[string]interface{}, error) {
