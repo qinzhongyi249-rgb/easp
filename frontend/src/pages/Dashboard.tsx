@@ -6,6 +6,8 @@ import {
   ApiOutlined,
   ToolOutlined,
   BulbOutlined,
+  ThunderboltOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,6 +22,8 @@ import { roleApi } from '../api/role';
 import { connectorApi } from '../api/connector';
 import { mcpToolApi } from '../api/mcpTool';
 import { skillApi } from '../api/skill';
+import { usageApi } from '../api/usage';
+import type { UsageSummary } from '../api/usage';
 
 const { Title } = Typography;
 
@@ -36,6 +40,7 @@ const Dashboard: React.FC = () => {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tools, setTools] = useState<MCPTool[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const isMobile = window.innerWidth < 768;
 
@@ -49,18 +54,20 @@ const Dashboard: React.FC = () => {
         }
 
         if (currentTenant) {
-          const [u, r, c, t, s] = await Promise.allSettled([
+          const [u, r, c, t, s, usageRes] = await Promise.allSettled([
             userApi.listByTenant(currentTenant),
             roleApi.list(currentTenant),
             connectorApi.list(currentTenant),
             mcpToolApi.list(currentTenant),
             skillApi.list(currentTenant),
+            usageApi.summary(currentTenant),
           ]);
           if (u.status === 'fulfilled') setUsers(u.value.data || []);
           if (r.status === 'fulfilled') setRoles(r.value.data || []);
           if (c.status === 'fulfilled') setConnectors(c.value.data || []);
           if (t.status === 'fulfilled') setTools(t.value.data || []);
           if (s.status === 'fulfilled') setSkills(s.value.data || []);
+          if (usageRes.status === 'fulfilled') setUsage(usageRes.value.data);
         }
       } catch {
         // ignore
@@ -77,6 +84,21 @@ const Dashboard: React.FC = () => {
     <div>
       <Title level={isMobile ? 4 : 3} style={{ marginBottom: isMobile ? 16 : 24 }}>仪表盘</Title>
       <Row gutter={[isMobile ? 12 : 24, isMobile ? 12 : 24]}>
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="今日Tokens" value={usage?.today_tokens || 0} prefix={<ThunderboltOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="今日模型调用" value={usage?.today_model_calls || 0} prefix={<RobotOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={12} lg={8}>
+          <Card hoverable size={isMobile ? 'small' : 'default'}>
+            <Statistic title="今日工具调用" value={usage?.today_tool_calls || 0} prefix={<ToolOutlined />} valueStyle={{ fontSize: isMobile ? 20 : 24 }} />
+          </Card>
+        </Col>
         {isAdmin && (
           <Col xs={12} sm={12} lg={8}>
             <Card hoverable size={isMobile ? 'small' : 'default'}>

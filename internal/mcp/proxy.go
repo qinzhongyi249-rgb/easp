@@ -6,22 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/easp-platform/easp/internal/logger"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/resilience"
 )
 
 // ProxyConfig 代理配置
 type ProxyConfig struct {
-	Timeout         time.Duration
-	MaxRetries      int
-	RetryDelay      time.Duration
-	CircuitBreaker  *resilience.CircuitBreaker
-	RateLimiter     resilience.RateLimiter
+	Timeout        time.Duration
+	MaxRetries     int
+	RetryDelay     time.Duration
+	CircuitBreaker *resilience.CircuitBreaker
+	RateLimiter    resilience.RateLimiter
 }
 
 // DefaultProxyConfig 默认代理配置
@@ -73,6 +73,12 @@ type ToolCallResponse struct {
 // CallTool 调用工具
 func (p *MCPProxy) CallTool(ctx context.Context, req ToolCallRequest) (*ToolCallResponse, error) {
 	start := time.Now()
+	logger.Info("mcp", "tool call started",
+		logger.Field("tenant_id", req.Connector.TenantID),
+		logger.Field("connector_id", req.Connector.ID),
+		logger.Field("tool_id", req.Tool.ID),
+		logger.Field("tool", req.Tool.Name),
+	)
 
 	// 获取熔断器
 	cbName := fmt.Sprintf("%s_%s", req.Connector.ID, req.Tool.Name)
@@ -100,14 +106,38 @@ func (p *MCPProxy) CallTool(ctx context.Context, req ToolCallRequest) (*ToolCall
 	})
 
 	if err != nil {
+		latency := time.Since(start).Milliseconds()
+		logger.Error("mcp", "tool call failed",
+			logger.Field("tenant_id", req.Connector.TenantID),
+			logger.Field("connector_id", req.Connector.ID),
+			logger.Field("tool", req.Tool.Name),
+			logger.Field("duration_ms", latency),
+			logger.Field("error", err.Error()),
+		)
 		return &ToolCallResponse{
 			Success: false,
 			Error:   err.Error(),
-			Latency: time.Since(start).Milliseconds(),
+			Latency: latency,
 		}, nil
 	}
 
 	resp.Latency = time.Since(start).Milliseconds()
+	if resp.Success {
+		logger.Info("mcp", "tool call completed",
+			logger.Field("tenant_id", req.Connector.TenantID),
+			logger.Field("connector_id", req.Connector.ID),
+			logger.Field("tool", req.Tool.Name),
+			logger.Field("duration_ms", resp.Latency),
+		)
+	} else {
+		logger.Warn("mcp", "tool call returned error",
+			logger.Field("tenant_id", req.Connector.TenantID),
+			logger.Field("connector_id", req.Connector.ID),
+			logger.Field("tool", req.Tool.Name),
+			logger.Field("duration_ms", resp.Latency),
+			logger.Field("error", resp.Error),
+		)
+	}
 	return resp, nil
 }
 
@@ -171,7 +201,12 @@ func (p *MCPProxy) executeTool(ctx context.Context, req ToolCallRequest) (*ToolC
 	}
 
 	// 发送请求
-	log.Printf("MCP Proxy: %s %s", method, url)
+	logger.Info("mcp", "rest proxy request",
+		logger.Field("tenant_id", req.Connector.TenantID),
+		logger.Field("connector_id", req.Connector.ID),
+		logger.Field("tool", req.Tool.Name),
+		logger.Field("method", method),
+	)
 	httpResp, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -221,7 +256,12 @@ func (p *MCPProxy) executeMCPTool(ctx context.Context, req ToolCallRequest) (*To
 		}
 	}
 
-	log.Printf("MCP Proxy: calling tool %s via %s on %s", req.Tool.Name, transportType, serverURL)
+	logger.Info("mcp", "mcp protocol call",
+		logger.Field("tenant_id", req.Connector.TenantID),
+		logger.Field("connector_id", req.Connector.ID),
+		logger.Field("tool", req.Tool.Name),
+		logger.Field("transport", transportType),
+	)
 
 	if transportType == "streamable_http" {
 		return p.callToolStreamableHTTP(ctx, serverURL, req.Tool.Name, args, req.Connector)

@@ -6,25 +6,23 @@ import (
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
-	"github.com/easp-platform/easp/internal/embedding"
 	"github.com/easp-platform/easp/internal/vectordb"
 	"github.com/google/uuid"
 )
 
 // VectorMemoryService 向量记忆服务
 type VectorMemoryService struct {
-	vectorDB     *vectordb.Client
-	embeddingSvc *embedding.EmbeddingService
-	database     string
-	collection   string
+	vectorDB   *vectordb.Client
+	database   string
+	collection string
 }
 
 // VectorMemoryConfig 向量记忆配置
 type VectorMemoryConfig struct {
-	BridgeURL  string                `json:"bridge_url"`  // 桥接服务地址
-	Database   string                `json:"database"`
-	Collection string                `json:"collection"`
-	Dimension  int                   `json:"dimension"`
+	BridgeURL  string `json:"bridge_url"`  // 桥接服务地址
+	Database   string `json:"database"`
+	Collection string `json:"collection"`
+	Dimension  int    `json:"dimension"` // 保留但不再用于生成向量，仅兼容
 }
 
 // NewVectorMemoryService 创建向量记忆服务
@@ -38,10 +36,6 @@ func NewVectorMemoryService(config VectorMemoryConfig) *VectorMemoryService {
 		vectorDB: vectordb.NewClient(vectordb.Config{
 			Endpoint: bridgeURL,
 			Timeout:  30,
-		}),
-		embeddingSvc: embedding.NewEmbeddingService(embedding.EmbeddingConfig{
-			Endpoint:  bridgeURL,
-			Dimension: config.Dimension,
 		}),
 		database:   config.Database,
 		collection: config.Collection,
@@ -72,41 +66,35 @@ func (s *VectorMemoryService) Init() error {
 		log.Printf("Database may already exist: %v", err)
 	}
 
-	// 确保Collection存在
-	if err := s.vectorDB.CreateCollection(s.database, s.collection, s.embeddingSvc.GetDimension()); err != nil {
+	// 确保Collection存在 (dimension=1024, bge-large-zh-v1.5)
+	if err := s.vectorDB.CreateCollection(s.database, s.collection, 1024); err != nil {
 		log.Printf("Collection may already exist: %v", err)
 	}
 
 	return nil
 }
 
-// SaveMemory 保存记忆
+// SaveMemory 保存记忆 - 直接传文本，向量数据库自动 Embedding
 func (s *VectorMemoryService) SaveMemory(memory VectorMemory) error {
-	// 生成Embedding
-	vector, err := s.embeddingSvc.GetEmbedding(memory.Content)
-	if err != nil {
-		return fmt.Errorf("failed to get embedding: %w", err)
+	// 使用文本模式插入，向量数据库自动 Embedding
+	fields := map[string]interface{}{
+		"tenant_id":   memory.TenantID,
+		"pool_id":     memory.PoolID,
+		"type":        memory.Type,
+		"sensitivity": memory.Sensitivity,
 	}
 
-	// 保存到向量数据库
-	doc := vectordb.Document{
-		ID:     memory.ID,
-		Vector: vector,
-		Fields: map[string]interface{}{
-			"tenant_id":   memory.TenantID,
-			"pool_id":     memory.PoolID,
-			"content":     memory.Content,
-			"type":        memory.Type,
-			"sensitivity": memory.Sensitivity,
-		},
-	}
-
-	if err := s.vectorDB.Insert(s.database, s.collection, []vectordb.Document{doc}); err != nil {
+	if err := s.vectorDB.InsertText(
+		s.database, s.collection,
+		memory.ID,
+		memory.Content, // 文本 - 向量数据库自动转为向量
+		fields,
+	); err != nil {
 		return fmt.Errorf("failed to insert vector: %w", err)
 	}
 
 	// 同时保存到MySQL
-	_, err = database.DB.NamedExec(`
+	_, err := database.DB.NamedExec(`
 		INSERT INTO memory_vectors (id, tenant_id, pool_id, content, type, sensitivity, created_at)
 		VALUES (:id, :tenant_id, :pool_id, :content, :type, :sensitivity, :created_at)
 	`, memory)
@@ -117,16 +105,18 @@ func (s *VectorMemoryService) SaveMemory(memory VectorMemory) error {
 	return nil
 }
 
-// SearchMemories 搜索相似记忆
+// SearchMemories 搜索相似记忆 - 直接传查询文本，向量数据库自动 Embedding
 func (s *VectorMemoryService) SearchMemories(tenantID, poolID, query string, limit int) ([]VectorMemory, error) {
-	// 生成查询向量
-	vector, err := s.embeddingSvc.GetEmbedding(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get embedding: %w", err)
+	// 构建过滤条件
+	filters := map[string]string{
+		"tenant_id": tenantID,
+	}
+	if poolID != "" {
+		filters["pool_id"] = poolID
 	}
 
-	// 向量搜索
-	results, err := s.vectorDB.Search(s.database, s.collection, vector, limit)
+	// 文本搜索：向量数据库自动 Embedding 后搜索
+	results, err := s.vectorDB.SearchByText(s.database, s.collection, query, limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -95,19 +96,31 @@ func GenerateTokenPair(userID, tenantID, email, roleIDs string) (*TokenPair, err
 
 // ParseToken 解析Token
 func ParseToken(tokenStr string) (*Claims, error) {
+	log.Printf("ParseToken: received token (first 30 chars): %s...", tokenStr[:min(30, len(tokenStr))])
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		log.Printf("ParseToken: JWT secret: %s", string(JWTSecret))
 		return JWTSecret, nil
 	})
 
 	if err != nil {
+		log.Printf("ParseToken: jwt.ParseWithClaims error: %v", err)
 		return nil, err
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		log.Printf("ParseToken: success, user=%s, tenant=%s", claims.UserID, claims.TenantID)
 		return claims, nil
 	}
 
+	log.Printf("ParseToken: token.Claims type assert failed or token invalid")
 	return nil, errors.New("invalid token")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // RefreshAccessToken 刷新Access Token

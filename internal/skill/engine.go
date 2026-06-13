@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
+	"github.com/easp-platform/easp/internal/logger"
 	"github.com/easp-platform/easp/internal/models"
 )
 
@@ -33,8 +33,8 @@ type StepExecutor func(ctx context.Context, step Step, inputs map[string]interfa
 // Step 步骤定义
 type Step struct {
 	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`         // mcp_tool / http_request / condition / assign / code
-	Action     string                 `json:"action"`       // 工具名或URL
+	Type       string                 `json:"type"`   // mcp_tool / http_request / condition / assign / code
+	Action     string                 `json:"action"` // 工具名或URL
 	Params     map[string]interface{} `json:"params,omitempty"`
 	Condition  string                 `json:"condition,omitempty"`
 	NextOnOK   string                 `json:"next_on_ok,omitempty"`
@@ -53,16 +53,17 @@ type SkillExecution struct {
 	StepResults []StepResult           `json:"step_results"`
 	StartedAt   time.Time              `json:"started_at"`
 	EndedAt     *time.Time             `json:"ended_at,omitempty"`
+	DurationMS  int64                  `json:"duration_ms"`
 	Error       string                 `json:"error,omitempty"`
 }
 
 // StepResult 步骤结果
 type StepResult struct {
-	StepName   string                 `json:"step_name"`
-	Status     string                 `json:"status"`
-	Outputs    map[string]interface{} `json:"outputs,omitempty"`
-	Error      string                 `json:"error,omitempty"`
-	Duration   int64                  `json:"duration_ms"`
+	StepName string                 `json:"step_name"`
+	Status   string                 `json:"status"`
+	Outputs  map[string]interface{} `json:"outputs,omitempty"`
+	Error    string                 `json:"error,omitempty"`
+	Duration int64                  `json:"duration_ms"`
 }
 
 // NewSkillEngine 创建Skill执行引擎
@@ -123,7 +124,10 @@ func (e *SkillEngine) registerMCPToolExecutor() {
 		}
 
 		argumentsJSON, _ := json.Marshal(finalParams)
-		log.Printf("SkillEngine: calling MCP tool %s with args: %s", toolName, string(argumentsJSON))
+		logger.Info("skill", "calling mcp tool",
+			logger.Field("tenant_id", e.tenantID),
+			logger.Field("tool", toolName),
+		)
 
 		// 通过 caller 函数调用
 		result, callErr := e.mcpCaller(ctx, toolName, json.RawMessage(argumentsJSON))
@@ -234,6 +238,14 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 		return execution, err
 	}
 
+	logger.Info("skill", "execution started",
+		logger.Field("execution_id", execution.ID),
+		logger.Field("tenant_id", skill.TenantID),
+		logger.Field("skill_id", skill.ID),
+		logger.Field("skill_name", skill.Name),
+		logger.Field("steps", len(steps)),
+	)
+
 	// 执行步骤
 	variables := make(map[string]interface{})
 	for k, v := range inputs {
@@ -247,8 +259,34 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 			break
 		}
 
+		logger.Info("skill", "step started",
+			logger.Field("execution_id", execution.ID),
+			logger.Field("tenant_id", skill.TenantID),
+			logger.Field("skill_id", skill.ID),
+			logger.Field("step", step.Name),
+			logger.Field("type", step.Type),
+		)
 		stepResult := e.executeStep(ctx, *step, variables)
 		execution.StepResults = append(execution.StepResults, stepResult)
+		if stepResult.Status == "failed" {
+			logger.Error("skill", "step failed",
+				logger.Field("execution_id", execution.ID),
+				logger.Field("tenant_id", skill.TenantID),
+				logger.Field("skill_id", skill.ID),
+				logger.Field("step", step.Name),
+				logger.Field("duration_ms", stepResult.Duration),
+				logger.Field("error", stepResult.Error),
+			)
+		} else {
+			logger.Info("skill", "step completed",
+				logger.Field("execution_id", execution.ID),
+				logger.Field("tenant_id", skill.TenantID),
+				logger.Field("skill_id", skill.ID),
+				logger.Field("step", step.Name),
+				logger.Field("status", stepResult.Status),
+				logger.Field("duration_ms", stepResult.Duration),
+			)
+		}
 
 		if stepResult.Status == "failed" {
 			execution.Status = "failed"
@@ -269,7 +307,11 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 		if step.NextOnOK != "" {
 			currentStep = step.NextOnOK
 		} else {
-			currentStep = e.getNextStepName(steps, step.Name)
+			nextStep := e.getNextStepName(steps, step.Name)
+			if nextStep == "" {
+				break
+			}
+			currentStep = nextStep
 		}
 	}
 
@@ -280,7 +322,16 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 
 	now := time.Now()
 	execution.EndedAt = &now
+	execution.DurationMS = now.Sub(execution.StartedAt).Milliseconds()
 	e.saveExecution(execution)
+	logger.Info("skill", "execution finished",
+		logger.Field("execution_id", execution.ID),
+		logger.Field("tenant_id", skill.TenantID),
+		logger.Field("skill_id", skill.ID),
+		logger.Field("status", execution.Status),
+		logger.Field("duration_ms", execution.DurationMS),
+		logger.Field("error", execution.Error),
+	)
 
 	return execution, nil
 }
@@ -337,7 +388,11 @@ func (e *SkillEngine) ExecuteWithMCP(ctx context.Context, tenantID string, rawSt
 		if step.NextOnOK != "" {
 			currentStep = step.NextOnOK
 		} else {
-			currentStep = e.getNextStepName(steps, step.Name)
+			nextStep := e.getNextStepName(steps, step.Name)
+			if nextStep == "" {
+				break
+			}
+			currentStep = nextStep
 		}
 	}
 
@@ -457,6 +512,11 @@ func (e *SkillEngine) resolveValue(v interface{}, variables map[string]interface
 			varPath := val[2 : len(val)-1]
 			return e.getNestedValue(varPath, variables)
 		}
+		// 兼容旧技能中常见的 {{var.name}} 模板变量
+		if strings.HasPrefix(val, "{{") && strings.HasSuffix(val, "}}") {
+			varPath := strings.TrimSpace(val[2 : len(val)-2])
+			return e.getNestedValue(varPath, variables)
+		}
 		return val
 	case map[string]interface{}:
 		result := make(map[string]interface{})
@@ -502,7 +562,7 @@ func (e *SkillEngine) saveExecution(execution *SkillExecution) {
 		string(inputsJSON), string(outputsJSON), string(stepResultsJSON),
 		execution.Error, execution.StartedAt, execution.EndedAt)
 	if err != nil {
-		log.Printf("Failed to save skill execution: %v", err)
+		logger.Error("skill", "failed to save execution", logger.Field("execution_id", execution.ID), logger.Field("error", err.Error()))
 	}
 }
 

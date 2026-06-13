@@ -6,7 +6,9 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/auth"
@@ -76,7 +78,6 @@ func (h *TenantHandler) Create(c *gin.Context) {
 		DisplayName:  "管理员",
 		PasswordHash: string(passwordHash),
 		Status:       "active",
-		
 	}
 
 	if err := userRepo.Create(adminUser); err != nil {
@@ -600,19 +601,19 @@ func (h *MCPToolHandler) GetByID(c *gin.Context) {
 // ListByTenant 列出租户下的MCP工具
 func (h *MCPToolHandler) ListByTenant(c *gin.Context) {
 	tenantID := c.Param("tenantId")
-	
+
 	// 可选参数：只返回启用的工具
 	enabledOnly := c.Query("enabled")
-	
+
 	var tools []models.MCPTool
 	var err error
-	
+
 	if enabledOnly == "true" {
 		tools, err = h.repo.ListEnabled(tenantID)
 	} else {
 		tools, err = h.repo.ListByTenant(tenantID)
 	}
-	
+
 	if err != nil {
 		log.Printf("Failed to list MCP tools: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list MCP tools", "details": err.Error()})
@@ -624,24 +625,44 @@ func (h *MCPToolHandler) ListByTenant(c *gin.Context) {
 // Update 更新MCP工具
 func (h *MCPToolHandler) Update(c *gin.Context) {
 	toolID := c.Param("toolId")
-	tool, err := h.repo.GetByID(toolID)
+	existing, err := h.repo.GetByID(toolID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "MCP tool not found"})
 		return
 	}
 
-	if err := c.ShouldBindJSON(tool); err != nil {
+	var req models.MCPTool
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.repo.Update(tool); err != nil {
+	// 保留服务端权威字段，避免前端未传 id/tenant_id/connector_id 时被零值覆盖。
+	req.ID = existing.ID
+	req.TenantID = existing.TenantID
+	if req.ConnectorID == "" {
+		req.ConnectorID = existing.ConnectorID
+	}
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+	if req.BackendMethod == nil || *req.BackendMethod == "" {
+		req.BackendMethod = existing.BackendMethod
+	}
+	if req.BackendPath == nil || *req.BackendPath == "" {
+		req.BackendPath = existing.BackendPath
+	}
+	if req.RiskLevel == "" {
+		req.RiskLevel = existing.RiskLevel
+	}
+
+	if err := h.repo.Update(&req); err != nil {
 		log.Printf("Failed to update MCP tool: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update MCP tool", "details": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, tool)
+	c.JSON(http.StatusOK, req)
 }
 
 // Delete 删除MCP工具
@@ -660,7 +681,7 @@ func (h *MCPToolHandler) ToggleEnabled(c *gin.Context) {
 	toolID := c.Param("toolId")
 	enabledStr := c.Query("enabled")
 	enabled, _ := strconv.ParseBool(enabledStr)
-	
+
 	if err := h.repo.ToggleEnabled(toolID, enabled); err != nil {
 		log.Printf("Failed to toggle MCP tool: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to toggle MCP tool", "details": err.Error()})
@@ -678,6 +699,74 @@ func NewSkillHandler() *SkillHandler {
 	return &SkillHandler{repo: repositories.NewSkillRepository()}
 }
 
+func ensureSkillInputSchema(sk *models.Skill) {
+	if sk == nil || (sk.InputSchema != nil && strings.TrimSpace(*sk.InputSchema) != "") {
+		return
+	}
+
+	vars := inferSkillInputVars(sk.Steps)
+	if len(vars) == 0 {
+		return
+	}
+
+	properties := map[string]any{}
+	for _, name := range vars {
+		properties[name] = map[string]any{
+			"type":        "string",
+			"title":       humanizeSkillInputName(name),
+			"description": humanizeSkillInputName(name),
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   vars,
+	}
+	if b, err := json.Marshal(schema); err == nil {
+		s := string(b)
+		sk.InputSchema = &s
+	}
+}
+
+func inferSkillInputVars(steps string) []string {
+	seen := map[string]bool{}
+	vars := []string{}
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`\{\{\s*([a-zA-Z_][a-zA-Z0-9_.-]*)\s*\}\}`),
+		regexp.MustCompile(`\$\{\s*([a-zA-Z_][a-zA-Z0-9_.-]*)\s*\}`),
+	}
+	for _, re := range patterns {
+		for _, match := range re.FindAllStringSubmatch(steps, -1) {
+			name := strings.TrimSpace(match[1])
+			if strings.HasPrefix(name, "steps.") || strings.HasPrefix(name, "outputs.") {
+				continue
+			}
+			name = strings.TrimPrefix(name, "inputs.")
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			vars = append(vars, name)
+		}
+	}
+	return vars
+}
+
+func humanizeSkillInputName(name string) string {
+	switch name {
+	case "user_email", "email":
+		return "用户邮箱"
+	case "role_name":
+		return "角色名称"
+	case "role_id":
+		return "角色ID"
+	case "user_id":
+		return "用户ID"
+	default:
+		return name
+	}
+}
+
 // Create 创建Skill
 func (h *SkillHandler) Create(c *gin.Context) {
 	tenantID := c.Param("tenantId")
@@ -693,6 +782,7 @@ func (h *SkillHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create skill", "details": err.Error()})
 		return
 	}
+	ensureSkillInputSchema(&skill)
 
 	c.JSON(http.StatusCreated, skill)
 }
@@ -705,29 +795,36 @@ func (h *SkillHandler) GetByID(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
 		return
 	}
+	ensureSkillInputSchema(skill)
 	c.JSON(http.StatusOK, skill)
 }
 
 // ListByTenant 列出租户下的Skill
 func (h *SkillHandler) ListByTenant(c *gin.Context) {
 	tenantID := c.Param("tenantId")
-	
+
 	// 可选参数：按状态过滤
 	status := c.Query("status")
-	
+
 	var skills []models.Skill
 	var err error
-	
+
 	if status != "" {
 		skills, err = h.repo.ListByStatus(tenantID, status)
 	} else {
 		skills, err = h.repo.ListByTenant(tenantID)
 	}
-	
+
 	if err != nil {
 		log.Printf("Failed to list skills: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list skills", "details": err.Error()})
 		return
+	}
+	if skills == nil {
+		skills = []models.Skill{}
+	}
+	for i := range skills {
+		ensureSkillInputSchema(&skills[i])
 	}
 	c.JSON(http.StatusOK, skills)
 }
@@ -768,8 +865,8 @@ func (h *SkillHandler) Delete(c *gin.Context) {
 
 // MemoryHandler 记忆处理器
 type MemoryHandler struct {
-	poolRepo   *repositories.MemoryPoolRepository
-	entryRepo  *repositories.MemoryEntryRepository
+	poolRepo  *repositories.MemoryPoolRepository
+	entryRepo *repositories.MemoryEntryRepository
 }
 
 func NewMemoryHandler() *MemoryHandler {
@@ -838,16 +935,16 @@ func (h *MemoryHandler) ListEntries(c *gin.Context) {
 	entryType := c.Query("type")
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
-	
+
 	var entries []models.MemoryEntry
 	var err error
-	
+
 	if entryType != "" {
 		entries, err = h.entryRepo.ListByType(poolID, entryType, limit)
 	} else {
 		entries, err = h.entryRepo.ListByPool(poolID, limit)
 	}
-	
+
 	if err != nil {
 		log.Printf("Failed to list memory entries: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list memory entries", "details": err.Error()})
@@ -862,12 +959,12 @@ func (h *MemoryHandler) SearchEntries(c *gin.Context) {
 	keyword := c.Query("q")
 	limitStr := c.DefaultQuery("limit", "20")
 	limit, _ := strconv.Atoi(limitStr)
-	
+
 	if keyword == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Search keyword is required"})
 		return
 	}
-	
+
 	entries, err := h.entryRepo.SearchByContent(poolID, keyword, limit)
 	if err != nil {
 		log.Printf("Failed to search memory entries: %v", err)
@@ -938,7 +1035,7 @@ func (h *AuditLogHandler) ListByTenant(c *gin.Context) {
 	offsetStr := c.DefaultQuery("offset", "0")
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
-	
+
 	logs, err := h.repo.ListByTenant(tenantID, limit, offset)
 	if err != nil {
 		log.Printf("Failed to list audit logs: %v", err)

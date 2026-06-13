@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/easp-platform/easp/internal/auth"
+	"github.com/easp-platform/easp/internal/logger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,6 +42,13 @@ func JWTAuth() gin.HandlerFunc {
 		// 解析Token
 		claims, err := auth.ParseToken(tokenStr)
 		if err != nil {
+			logger.Warn("auth", "jwt parse failed",
+				logger.Field("request_id", logger.GetRequestID(c)),
+				logger.Field("path", c.Request.URL.Path),
+				logger.Field("client_ip", c.ClientIP()),
+				logger.Field("error", err.Error()),
+				logger.Field("token", tokenStr),
+			)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			c.Abort()
 			return

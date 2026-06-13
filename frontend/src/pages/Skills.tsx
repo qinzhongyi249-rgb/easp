@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm, Empty } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BulbOutlined, PlayCircleOutlined, MoreOutlined, HistoryOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Skill, SkillExecution, StepResult, JsonSchema } from '../api/skill';
@@ -16,22 +16,66 @@ const parseInputSchema = (schemaStr?: string): { fields: Array<{ name: string; t
   try {
     const schema: JsonSchema = JSON.parse(schemaStr);
     const required = schema.required || [];
-    const fields = Object.entries(schema.properties || {}).map(([name, prop]) => ({
-      name,
-      type: prop.type,
-      title: prop.title || name,
-      description: prop.description,
-      required: required.includes(name),
-      defaultValue: prop.default,
-    }));
+    const properties = schema.properties || {};
+    const orderedNames = [
+      ...required.filter(name => Object.prototype.hasOwnProperty.call(properties, name)),
+      ...Object.keys(properties).filter(name => !required.includes(name)),
+    ];
+    const fields = orderedNames.map((name) => {
+      const prop = properties[name];
+      return {
+        name,
+        type: prop.type,
+        title: prop.title || name,
+        description: prop.description,
+        required: required.includes(name),
+        defaultValue: prop.default,
+      };
+    });
     return { fields, required };
   } catch { return { fields: [], required: [] }; }
 };
 
 // 步骤结果状态图标
+const isSuccessStatus = (status?: string) => status === 'success' || status === 'completed';
+const isFailedStatus = (status?: string) => status === 'failed' || status === 'error';
+
+const parseStepResults = (value: SkillExecution['step_results']): StepResult[] => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  }
+  return [];
+};
+
+const parseOutputs = (value: SkillExecution['outputs']): Record<string, unknown> => {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  }
+  return typeof value === 'object' && !Array.isArray(value) ? value : {};
+};
+
+const calcDurationMs = (result: SkillExecution): number | undefined => {
+  if (typeof result.duration_ms === 'number') return result.duration_ms;
+  if (result.started_at && result.ended_at) {
+    const ms = new Date(result.ended_at).getTime() - new Date(result.started_at).getTime();
+    return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+  }
+  return undefined;
+};
+
 const StepStatusIcon = ({ status }: { status: string }) => {
   switch (status) {
-    case 'success': return <CheckCircleOutlined style={{ color: '#52c41a' }} />;
+    case 'success':
+    case 'completed': return <CheckCircleOutlined style={{ color: '#52c41a' }} />;
     case 'failed': return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
     case 'running': return <LoadingOutlined style={{ color: '#1890ff' }} />;
     case 'skipped': return <ClockCircleOutlined style={{ color: '#999' }} />;
@@ -182,10 +226,17 @@ const Skills: React.FC = () => {
     try {
       const res = await skillApi.execute(currentTenant, executingSkill.id, values);
       setExecutionResult(res.data);
-      message.success('执行完成');
+      if (isFailedStatus(res.data?.status)) {
+        message.error(res.data?.error || '执行失败');
+      } else {
+        message.success('执行完成');
+      }
       load(); // 刷新使用次数
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
+      const e = err as { response?: { data?: SkillExecution & { error?: string } } };
+      if (e.response?.data?.id) {
+        setExecutionResult(e.response.data);
+      }
       message.error(e.response?.data?.error || '执行失败');
     } finally { setExecuting(false); }
   };
@@ -193,12 +244,17 @@ const Skills: React.FC = () => {
   // ========== 执行历史 ==========
   const openHistory = async (skill: Skill) => {
     setHistorySkill(skill);
+    setExecutions([]);
     setHistoryModalOpen(true);
     setHistoryLoading(true);
     try {
       const res = await skillApi.listExecutions(currentTenant, skill.id);
-      setExecutions(res.data?.executions || []);
-    } catch { message.error('加载历史失败'); }
+      const list = res.data?.executions;
+      setExecutions(Array.isArray(list) ? list : []);
+    } catch {
+      setExecutions([]);
+      message.error('加载历史失败');
+    }
     finally { setHistoryLoading(false); }
   };
 
@@ -251,7 +307,7 @@ const Skills: React.FC = () => {
       case 'number':
         return (
           <Form.Item key={field.name} name={field.name} label={field.title} rules={rules} tooltip={field.description}>
-            <Input style={{ width: '100%' }} placeholder={field.description || `输入${field.title}`} />
+            <InputNumber style={{ width: '100%' }} placeholder={field.description || `输入${field.title}`} />
           </Form.Item>
         );
       case 'boolean':
@@ -278,25 +334,19 @@ const Skills: React.FC = () => {
 
   // ========== 渲染执行结果 ==========
   const renderExecutionResult = (result: SkillExecution) => {
-    let stepResults: StepResult[] = [];
-    if (result.step_results) {
-      try { stepResults = JSON.parse(result.step_results as unknown as string); } catch { /* ignore */ }
-    }
-
-    let outputs: Record<string, unknown> = {};
-    if (result.outputs) {
-      try { outputs = JSON.parse(result.outputs as unknown as string); } catch { /* ignore */ }
-    }
+    const stepResults = parseStepResults(result.step_results);
+    const outputs = parseOutputs(result.outputs);
+    const durationMs = calcDurationMs(result);
 
     return (
       <Card size="small" style={{ marginTop: 16 }}>
         <Descriptions column={2} size="small" bordered>
           <Descriptions.Item label="状态">
-            <Tag color={result.status === 'success' ? 'green' : result.status === 'failed' ? 'red' : 'blue'}>
+            <Tag color={isSuccessStatus(result.status) ? 'green' : isFailedStatus(result.status) ? 'red' : 'blue'}>
               {result.status}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="耗时">{result.duration_ms ? `${result.duration_ms}ms` : '-'}</Descriptions.Item>
+          <Descriptions.Item label="耗时">{durationMs !== undefined ? `${durationMs}ms` : '-'}</Descriptions.Item>
         </Descriptions>
 
         {result.error && (
@@ -313,10 +363,10 @@ const Skills: React.FC = () => {
               children: (
                 <div key={idx}>
                   <Text strong>{sr.step_name}</Text>
-                  <Tag style={{ marginLeft: 8 }} color={sr.status === 'success' ? 'green' : sr.status === 'failed' ? 'red' : 'default'}>
+                  <Tag style={{ marginLeft: 8 }} color={isSuccessStatus(sr.status) ? 'green' : isFailedStatus(sr.status) ? 'red' : 'default'}>
                     {sr.status}
                   </Tag>
-                  {sr.duration_ms > 0 && <Text type="secondary" style={{ marginLeft: 8 }}>{sr.duration_ms}ms</Text>}
+                  {typeof sr.duration_ms === 'number' && <Text type="secondary" style={{ marginLeft: 8 }}>{sr.duration_ms}ms</Text>}
                   {sr.error && <div><Text type="danger">{sr.error}</Text></div>}
                   {sr.outputs && (
                     <Collapse size="small" style={{ marginTop: 4 }} items={[{
@@ -480,12 +530,16 @@ const Skills: React.FC = () => {
       {/* ========== 执行历史弹窗 ========== */}
       <Modal title={historySkill ? `${historySkill.name} - 执行历史` : '执行历史'} open={historyModalOpen}
         onCancel={() => setHistoryModalOpen(false)} footer={null} width={isMobile ? '95%' : 700} destroyOnClose>
-        <Table dataSource={executions} loading={historyLoading} rowKey="id" size="small" pagination={{ pageSize: 10 }}
+        <Table dataSource={Array.isArray(executions) ? executions : []} loading={historyLoading} rowKey="id" size="small" pagination={{ pageSize: 10 }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
           columns={[
             { title: '状态', dataIndex: 'status', key: 'status', width: 80, render: (v: string) => (
-              <Tag color={v === 'success' ? 'green' : v === 'failed' ? 'red' : 'blue'}>{v}</Tag>
+              <Tag color={isSuccessStatus(v) ? 'green' : isFailedStatus(v) ? 'red' : 'blue'}>{v}</Tag>
             )},
-            { title: '耗时', dataIndex: 'duration_ms', key: 'duration_ms', width: 80, render: (v: number) => v ? `${v}ms` : '-' },
+            { title: '耗时', dataIndex: 'duration_ms', key: 'duration_ms', width: 80, render: (v: number, record: SkillExecution) => {
+              const ms = typeof v === 'number' ? v : calcDurationMs(record);
+              return ms !== undefined ? `${ms}ms` : '-';
+            } },
             { title: '执行时间', dataIndex: 'started_at', key: 'started_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
             { title: '错误', dataIndex: 'error', key: 'error', ellipsis: true, render: (v: string) => v ? <Text type="danger">{v}</Text> : '-' },
           ]}

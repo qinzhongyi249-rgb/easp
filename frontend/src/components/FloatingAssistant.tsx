@@ -271,8 +271,21 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = '';
       let currentContent = '';
       let modelInfo: ModelInfo | null = null;
+
+      const updateStatus = (content: string) => {
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'status') {
+            updated[updated.length - 1] = { ...last, content };
+            return updated;
+          }
+          return [...updated, { role: 'status', content }];
+        });
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -282,91 +295,90 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            let eventType = 'unknown';
-            const lineIndex = lines.indexOf(line);
-            for (let i = lineIndex - 1; i >= 0; i--) {
-              if (lines[i].startsWith('event: ')) {
-                eventType = lines[i].slice(7).trim();
+        for (const rawLine of lines) {
+          const line = rawLine.trimEnd();
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+            continue;
+          }
+          if (!line.startsWith('data: ')) continue;
+          const dataStr = line.slice(6);
+
+          try {
+            const data = JSON.parse(dataStr);
+            const eventType = currentEvent || data.type || 'message';
+            currentEvent = '';
+
+            switch (eventType) {
+              case 'model_info':
+              case 'model':
+                modelInfo = data;
+                setCurrentModel(data);
                 break;
-              }
-            }
 
-            try {
-              const data = JSON.parse(dataStr);
+              case 'status':
+              case 'heartbeat':
+                updateStatus(data.message || '处理中...');
+                break;
 
-              switch (eventType) {
-                case 'model_info':
-                  modelInfo = data;
-                  setCurrentModel(data);
-                  break;
+              case 'tool':
+              case 'tool_result':
+                updateStatus(`✓ ${data.name} 完成`);
+                break;
 
-                case 'status': {
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.role !== 'status');
-                    return [...filtered, { role: 'status', content: data.message || '处理中...' }];
-                  });
-                  break;
-                }
-
-                case 'tool':
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.role !== 'status');
-                    return [...filtered, { role: 'status', content: `✓ ${data.name} 完成` }];
-                  });
-                  break;
-
-                case 'delta':
-                  currentContent += data.content;
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.role !== 'status');
-                    const lastMsg = filtered[filtered.length - 1];
-                    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
-                      const newMsgs = [...filtered];
-                      newMsgs[newMsgs.length - 1] = {
-                        role: 'assistant', content: currentContent,
-                        isStreaming: true, modelInfo: modelInfo || undefined,
-                      };
-                      return newMsgs;
-                    }
-                    return [...filtered, {
+              case 'delta':
+                currentContent += data.content || '';
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.role !== 'status');
+                  const lastMsg = filtered[filtered.length - 1];
+                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
+                    const newMsgs = [...filtered];
+                    newMsgs[newMsgs.length - 1] = {
                       role: 'assistant', content: currentContent,
                       isStreaming: true, modelInfo: modelInfo || undefined,
-                    }];
-                  });
-                  break;
+                    };
+                    return newMsgs;
+                  }
+                  return [...filtered, {
+                    role: 'assistant', content: currentContent,
+                    isStreaming: true, modelInfo: modelInfo || undefined,
+                  }];
+                });
+                break;
 
-                case 'done': {
-                  const totalMs = data.total_ms;
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.role !== 'status');
-                    const lastMsg = filtered[filtered.length - 1];
-                    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isStreaming) {
-                      const newMsgs = [...filtered];
-                      newMsgs[newMsgs.length - 1] = {
-                        ...lastMsg, isStreaming: false, totalMs,
-                        modelInfo: modelInfo || undefined,
-                      };
-                      return newMsgs;
-                    }
-                    return filtered;
-                  });
-                  if (!open) setUnread(u => u + 1);
-                  currentContent = '';
-                  break;
-                }
-
-                case 'error':
-                  setMessages(prev => {
-                    const filtered = prev.filter(m => m.role !== 'status');
-                    return [...filtered, { role: 'assistant', content: `❌ ${data.message}` }];
-                  });
-                  break;
+              case 'done': {
+                const totalMs = data?.total_ms;
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.role !== 'status');
+                  if (!currentContent) return filtered;
+                  const lastMsg = filtered[filtered.length - 1];
+                  if (lastMsg && lastMsg.role === 'assistant') {
+                    const newMsgs = [...filtered];
+                    newMsgs[newMsgs.length - 1] = {
+                      ...lastMsg, isStreaming: false, totalMs,
+                      modelInfo: modelInfo || undefined,
+                    };
+                    return newMsgs;
+                  }
+                  return [...filtered, {
+                    role: 'assistant', content: currentContent,
+                    isStreaming: false, totalMs,
+                    modelInfo: modelInfo || undefined,
+                  }];
+                });
+                if (!open) setUnread(u => u + 1);
+                currentContent = '';
+                break;
               }
-            } catch { /* ignore parse errors */ }
-          }
+
+              case 'error':
+                setMessages(prev => {
+                  const filtered = prev.filter(m => m.role !== 'status');
+                  return [...filtered, { role: 'assistant', content: `❌ ${data.message}` }];
+                });
+                break;
+            }
+          } catch { /* ignore parse errors */ }
         }
       }
     } catch (err: unknown) {

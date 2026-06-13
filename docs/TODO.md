@@ -152,10 +152,15 @@
 - [ ] 负载均衡
 
 ### 6.3 模型监控
-- [ ] 调用次数统计
-- [ ] Token消耗统计
+- [x] 基础 Token 消耗记录 (model_usage)
+- [x] 基础 API 调用记录 (api_usage)
+- [ ] 用量分析独立页面（年月日汇总+明细+图表）
+- [ ] 功能来源统计（AI助手/MCP/Skill/Embed）
+- [ ] MCP工具/Skill调用次数统计
 - [ ] 响应时间监控
 - [ ] 错误率监控
+
+> 设计文档：`docs/USAGE_ANALYTICS.md`
 
 ---
 

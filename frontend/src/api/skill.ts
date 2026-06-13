@@ -50,7 +50,7 @@ export interface Skill {
 
 export interface StepResult {
   step_name: string;
-  status: string; // success/failed/skipped
+  status: string; // completed/success/failed/skipped
   outputs?: Record<string, unknown>;
   error?: string;
   duration_ms: number;
@@ -60,10 +60,10 @@ export interface SkillExecution {
   id: string;
   skill_id: string;
   tenant_id: string;
-  status: string; // running/success/failed
-  inputs?: string; // JSON
-  outputs?: string; // JSON
-  step_results?: string; // JSON array of StepResult
+  status: string; // running/completed/success/failed
+  inputs?: string | Record<string, unknown>; // JSON or native object
+  outputs?: string | Record<string, unknown>; // JSON or native object
+  step_results?: string | StepResult[]; // JSON array or native array
   started_at: string;
   ended_at?: string;
   error?: string;

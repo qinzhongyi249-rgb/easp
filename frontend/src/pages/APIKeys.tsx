@@ -7,6 +7,19 @@ import { useOutletContext } from 'react-router-dom';
 
 const { Title, Text, Paragraph } = Typography;
 
+const normalizeScopes = (value: APIKey['scopes']): string[] => {
+  if (Array.isArray(value)) return value.filter((s): s is string => typeof s === 'string' && s.length > 0);
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 interface LayoutContext {
   currentTenant: string;
 }
@@ -26,7 +39,7 @@ const APIKeys: React.FC = () => {
     setLoading(true);
     try {
       const res = await apiKeyApi.list(currentTenant);
-      setKeys(res.data || []);
+      setKeys(Array.isArray(res.data) ? res.data : []);
     } catch {
       message.error('加载失败');
     } finally {
@@ -94,9 +107,10 @@ const APIKeys: React.FC = () => {
     { title: 'Key 前缀', dataIndex: 'key_prefix', key: 'key_prefix',
       render: (v: string) => <Tag>{v}</Tag> },
     { title: '权限', dataIndex: 'scopes', key: 'scopes',
-      render: (v: string[] | null) => {
-        if (!v || v.length === 0) return <Tag color="green">全部</Tag>;
-        return v.map(s => <Tag key={s} color="blue">{s}</Tag>);
+      render: (v: APIKey['scopes']) => {
+        const scopes = normalizeScopes(v);
+        if (scopes.length === 0) return <Tag color="green">全部</Tag>;
+        return scopes.map(s => <Tag key={s} color="blue">{s}</Tag>);
       }},
     { title: '状态', key: 'enabled', render: (_: unknown, record: APIKey) => (
       <Switch

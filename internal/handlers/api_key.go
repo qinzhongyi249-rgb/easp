@@ -115,7 +115,23 @@ func (h *APIKeyHandler) CreateAPIKey(c *gin.Context) {
 func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
-	var keys []models.APIKey
+	type apiKeyListItem struct {
+		ID          string     `db:"id" json:"id"`
+		TenantID    string     `db:"tenant_id" json:"tenant_id"`
+		UserID      string     `db:"user_id" json:"user_id"`
+		Name        string     `db:"name" json:"name"`
+		KeyPrefix   string     `db:"key_prefix" json:"key_prefix"`
+		ScopesRaw   *string    `db:"scopes" json:"-"`
+		Scopes      []string   `db:"-" json:"scopes"`
+		Enabled     bool       `db:"enabled" json:"enabled"`
+		ExpiresAt   *time.Time `db:"expires_at" json:"expires_at,omitempty"`
+		LastUsedAt  *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
+		UsageCount  int64      `db:"usage_count" json:"usage_count"`
+		CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+		UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	}
+
+	var keys []apiKeyListItem
 	err := database.DB.Select(&keys,
 		"SELECT id, tenant_id, user_id, name, key_prefix, scopes, enabled, expires_at, last_used_at, usage_count, created_at, updated_at FROM api_keys WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
 	if err != nil {
@@ -123,7 +139,16 @@ func (h *APIKeyHandler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 	if keys == nil {
-		keys = []models.APIKey{}
+		keys = []apiKeyListItem{}
+	}
+	for i := range keys {
+		keys[i].Scopes = []string{}
+		if keys[i].ScopesRaw != nil && *keys[i].ScopesRaw != "" {
+			if err := json.Unmarshal([]byte(*keys[i].ScopesRaw), &keys[i].Scopes); err != nil {
+				log.Printf("ListAPIKeys: invalid scopes json for key %s: %v", keys[i].ID, err)
+				keys[i].Scopes = []string{}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, keys)

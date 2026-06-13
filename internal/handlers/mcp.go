@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/easp-platform/easp/internal/database"
-	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/mcp"
+	"github.com/easp-platform/easp/internal/middleware"
+	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/openapi"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -133,6 +135,12 @@ func (h *MCPHandler) SyncFromOpenAPI(c *gin.Context) {
 func (h *MCPHandler) CallTool(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	toolID := c.Param("toolId")
+	start := time.Now()
+	uid := ""
+	if v, ok := c.Get(middleware.ContextUserID); ok {
+		uid, _ = v.(string)
+	}
+	requestID := uuid.New().String()
 
 	// 获取工具
 	var tool models.MCPTool
@@ -180,10 +188,12 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 	})
 	if err != nil {
 		log.Printf("Tool call failed: %v", err)
+		RecordToolCallUsage(tenantID, uid, "mcp_tool", tool.ID, tool.Name, "mcp_api", "failed", int(time.Since(start).Milliseconds()), requestID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tool call failed", "details": err.Error()})
 		return
 	}
 
+	RecordToolCallUsage(tenantID, uid, "mcp_tool", tool.ID, tool.Name, "mcp_api", "success", int(time.Since(start).Milliseconds()), requestID, nil)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -542,11 +552,11 @@ func (h *MCPHandler) ImportMCPTools(c *gin.Context) {
 	database.DB.Exec("UPDATE connectors SET tools_count = ?, last_sync_at = NOW() WHERE id = ?", totalTools, connectorID)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":      "导入完成",
-		"total":        len(toolsToImport),
-		"created":      created,
-		"updated":      updated,
-		"server_info":  result.ServerInfo,
+		"message":     "导入完成",
+		"total":       len(toolsToImport),
+		"created":     created,
+		"updated":     updated,
+		"server_info": result.ServerInfo,
 	})
 }
 

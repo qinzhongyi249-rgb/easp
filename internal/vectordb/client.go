@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/easp-platform/easp/internal/logger"
 )
 
 // Config 向量数据库配置
@@ -39,7 +41,8 @@ func NewClient(config Config) *Client {
 // Document 文档
 type Document struct {
 	ID     string                 `json:"id"`
-	Vector []float32              `json:"vector"`
+	Vector []float32              `json:"vector,omitempty"` // 向量模式时使用
+	Text   string                 `json:"text,omitempty"`   // 文本模式时使用，向量数据库自动 Embedding
 	Fields map[string]interface{} `json:"fields,omitempty"`
 }
 
@@ -50,8 +53,17 @@ type SearchResult struct {
 	Fields map[string]interface{} `json:"fields,omitempty"`
 }
 
+// HealthInfo 健康检查返回信息
+type HealthInfo struct {
+	Status    string `json:"status"`
+	Service   string `json:"service"`
+	Embedding string `json:"embedding"`
+	Dimension int    `json:"dimension"`
+}
+
 // apiRequest 发送API请求
 func (c *Client) apiRequest(endpoint string, params interface{}) (json.RawMessage, error) {
+	start := time.Now()
 	bodyBytes, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -66,6 +78,11 @@ func (c *Client) apiRequest(endpoint string, params interface{}) (json.RawMessag
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		logger.Error("vectordb", "bridge request failed",
+			logger.Field("endpoint", endpoint),
+			logger.Field("duration_ms", time.Since(start).Milliseconds()),
+			logger.Field("error", err.Error()),
+		)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -82,13 +99,30 @@ func (c *Client) apiRequest(endpoint string, params interface{}) (json.RawMessag
 		Data    json.RawMessage `json:"data,omitempty"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Error("vectordb", "bridge response parse failed",
+			logger.Field("endpoint", endpoint),
+			logger.Field("status", resp.StatusCode),
+			logger.Field("duration_ms", time.Since(start).Milliseconds()),
+			logger.Field("error", err.Error()),
+		)
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	if result.Error != "" {
+		logger.Error("vectordb", "bridge api error",
+			logger.Field("endpoint", endpoint),
+			logger.Field("status", resp.StatusCode),
+			logger.Field("duration_ms", time.Since(start).Milliseconds()),
+			logger.Field("error", result.Error),
+		)
 		return nil, fmt.Errorf("API error: %s", result.Error)
 	}
 
+	logger.Info("vectordb", "bridge request completed",
+		logger.Field("endpoint", endpoint),
+		logger.Field("status", resp.StatusCode),
+		logger.Field("duration_ms", time.Since(start).Milliseconds()),
+	)
 	return result.Data, nil
 }
 
@@ -143,14 +177,15 @@ func (c *Client) ListCollections(database string) ([]string, error) {
 // CreateCollection 创建Collection
 func (c *Client) CreateCollection(database, name string, dimension int) error {
 	_, err := c.apiRequest("/api/collection/create", map[string]interface{}{
-		"database":   database,
-		"collection": name,
-		"dimension":  dimension,
+		"database":      database,
+		"collection":    name,
+		"dimension":     dimension,
+		"use_embedding": true,
 	})
 	return err
 }
 
-// Insert 插入文档
+// Insert 插入文档 (向量模式 - 兼容旧接口)
 func (c *Client) Insert(database, collection string, docs []Document) error {
 	_, err := c.apiRequest("/api/document/insert", map[string]interface{}{
 		"database":   database,
@@ -160,7 +195,24 @@ func (c *Client) Insert(database, collection string, docs []Document) error {
 	return err
 }
 
-// Search 向量搜索
+// InsertText 插入文档 (文本模式 - 推荐，向量数据库自动 Embedding)
+func (c *Client) InsertText(database, collection, id, text string, fields map[string]interface{}) error {
+	doc := map[string]interface{}{
+		"id":      id,
+		"content": text, // 向量数据库自动 Embedding 的字段
+	}
+	for k, v := range fields {
+		doc[k] = v
+	}
+	_, err := c.apiRequest("/api/document/insert", map[string]interface{}{
+		"database":   database,
+		"collection": collection,
+		"documents":  []map[string]interface{}{doc},
+	})
+	return err
+}
+
+// Search 向量搜索 (向量模式 - 兼容旧接口)
 func (c *Client) Search(database, collection string, vector []float32, limit int) ([]SearchResult, error) {
 	data, err := c.apiRequest("/api/document/search", map[string]interface{}{
 		"database":   database,
@@ -168,6 +220,31 @@ func (c *Client) Search(database, collection string, vector []float32, limit int
 		"vector":     vector,
 		"limit":      limit,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []SearchResult
+	if err := json.Unmarshal(data, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// SearchByText 文本搜索 (推荐 - 向量数据库自动 Embedding 后搜索)
+func (c *Client) SearchByText(database, collection, queryText string, limit int, filters map[string]string) ([]SearchResult, error) {
+	params := map[string]interface{}{
+		"database":   database,
+		"collection": collection,
+		"query_text": queryText,
+		"limit":      limit,
+	}
+	// 添加过滤条件
+	for k, v := range filters {
+		params[k] = v
+	}
+
+	data, err := c.apiRequest("/api/document/search", params)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +266,7 @@ func (c *Client) Delete(database, collection string, ids []string) error {
 	return err
 }
 
-// GetEmbedding 获取Embedding
+// GetEmbedding 获取Embedding (兼容旧接口 - 推荐直接传文本给 insert/search)
 func (c *Client) GetEmbedding(texts []string) ([][]float32, error) {
 	data, err := c.apiRequest("/api/embedding", map[string]interface{}{
 		"texts": texts,
@@ -205,9 +282,9 @@ func (c *Client) GetEmbedding(texts []string) ([][]float32, error) {
 	return vectors, nil
 }
 
-// GetDimension 获取向量维度
+// GetDimension 获取向量维度 (使用 bge-large-zh-v1.5: 1024维)
 func (c *Client) GetDimension() int {
-	return 1536
+	return 1024
 }
 
 // HealthCheck 健康检查
@@ -221,4 +298,25 @@ func (c *Client) HealthCheck() error {
 		return fmt.Errorf("health check failed: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// GetHealthInfo 厷取健康详情(含Embedding信息)
+func (c *Client) GetHealthInfo() (*HealthInfo, error) {
+	resp, err := c.httpClient.Get(c.config.Endpoint + "/health")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("health check failed: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var info HealthInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }

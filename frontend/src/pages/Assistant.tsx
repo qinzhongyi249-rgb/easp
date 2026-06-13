@@ -174,78 +174,112 @@ const Assistant: React.FC = () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const reader = res.body?.getReader();
+      if (!reader) throw new Error('No reader');
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = '';
       let assistantContent = '';
       let traceSteps: TraceStep[] = [];
       let toolResults: ToolResult[] = [];
       let modelInfo: ModelInfo | null = null;
       let totalMs: number | undefined;
 
-      while (reader) {
+      const updateStatus = (content: string, trace?: TraceStep[]) => {
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          const nextStatus: DisplayMessage = {
+            role: 'status',
+            content,
+            trace: trace || traceSteps,
+            toolResults,
+          };
+          if (last?.role === 'status') {
+            updated[updated.length - 1] = { ...last, ...nextStatus };
+            return updated;
+          }
+          return [...updated, nextStatus];
+        });
+      };
+
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        for (const line of lines) {
+        for (const rawLine of lines) {
+          const line = rawLine.trimEnd();
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+            continue;
+          }
           if (!line.startsWith('data: ')) continue;
           try {
             const data = JSON.parse(line.slice(6));
-            switch (data.type) {
+            const eventType = currentEvent || data.type || 'message';
+            currentEvent = '';
+            switch (eventType) {
+              case 'model_info':
               case 'model':
                 modelInfo = { model: data.model, display_name: data.display_name, provider: data.provider };
                 setCurrentModel(modelInfo);
                 break;
-              case 'trace':
+              case 'status':
+              case 'heartbeat':
+              case 'trace': {
                 traceSteps = [...traceSteps, { ...data, timestamp: data.timestamp || Date.now() }];
-                setMessages(prev => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last.role === 'status') {
-                    updated[updated.length - 1] = { ...last, trace: traceSteps };
-                  }
-                  return updated;
-                });
+                updateStatus(data.message || '处理中...', traceSteps);
                 break;
+              }
+              case 'tool':
               case 'tool_result':
                 toolResults = [...toolResults, { name: data.name, elapsed_ms: data.elapsed_ms }];
-                setMessages(prev => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last.role === 'status') {
-                    updated[updated.length - 1] = { ...last, toolResults };
-                  }
-                  return updated;
-                });
+                updateStatus(`✓ ${data.name} 完成`, traceSteps);
                 break;
               case 'delta':
-                assistantContent += data.content;
+                assistantContent += data.content || '';
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
-                  return [...filtered, { 
-                    role: 'assistant', 
-                    content: assistantContent, 
+                  const last = filtered[filtered.length - 1];
+                  const nextMsg: DisplayMessage = {
+                    role: 'assistant',
+                    content: assistantContent,
                     isStreaming: true,
                     modelInfo: modelInfo || undefined,
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
                     toolResults: toolResults.length > 0 ? toolResults : undefined,
-                  }];
+                  };
+                  if (last?.role === 'assistant' && last.isStreaming) {
+                    const next = [...filtered];
+                    next[next.length - 1] = { ...last, ...nextMsg };
+                    return next;
+                  }
+                  return [...filtered, nextMsg];
                 });
                 break;
               case 'done':
-                totalMs = data.total_ms;
+                totalMs = data?.total_ms;
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
-                  return [...filtered, { 
-                    role: 'assistant', 
-                    content: assistantContent, 
+                  if (!assistantContent) return filtered;
+                  const last = filtered[filtered.length - 1];
+                  const nextMsg: DisplayMessage = {
+                    role: 'assistant',
+                    content: assistantContent,
+                    isStreaming: false,
                     modelInfo: modelInfo || undefined,
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
                     toolResults: toolResults.length > 0 ? toolResults : undefined,
                     totalMs,
-                  }];
+                  };
+                  if (last?.role === 'assistant') {
+                    const next = [...filtered];
+                    next[next.length - 1] = { ...last, ...nextMsg };
+                    return next;
+                  }
+                  return [...filtered, nextMsg];
                 });
                 break;
               case 'error':

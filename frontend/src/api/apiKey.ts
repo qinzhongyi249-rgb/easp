@@ -9,7 +9,7 @@ export interface APIKey {
   name: string;
   key?: string;        // 只在创建时返回
   key_prefix: string;
-  scopes?: string[];
+  scopes?: string[] | string | null;
   enabled: boolean;
   expires_at: string | null;
   last_used_at: string | null;

@@ -19,9 +19,9 @@ func (r *SkillRepository) Create(skill *models.Skill) error {
 	skill.ID = uuid.New().String()
 	skill.CreatedAt = time.Now()
 	skill.UpdatedAt = time.Now()
-	
-	query := `INSERT INTO skills (id, tenant_id, name, description, version, triggers, steps, permission_topology, status, created_by, created_at, updated_at) 
-			  VALUES (:id, :tenant_id, :name, :description, :version, :triggers, :steps, :permission_topology, :status, :created_by, :created_at, :updated_at)`
+
+	query := `INSERT INTO skills (id, tenant_id, name, description, category, version, tags, triggers, input_schema, output_schema, steps, permission_topology, status, usage_count, last_used_at, created_by, created_at, updated_at)
+			  VALUES (:id, :tenant_id, :name, :description, :category, :version, :tags, :triggers, :input_schema, :output_schema, :steps, :permission_topology, :status, :usage_count, :last_used_at, :created_by, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, skill)
 	return err
 }
@@ -58,8 +58,8 @@ func (r *SkillRepository) ListByStatus(tenantID, status string) ([]models.Skill,
 
 func (r *SkillRepository) Update(skill *models.Skill) error {
 	skill.UpdatedAt = time.Now()
-	query := `UPDATE skills SET name=:name, description=:description, version=:version, triggers=:triggers, 
-			  steps=:steps, permission_topology=:permission_topology, status=:status, updated_at=:updated_at WHERE id=:id`
+	query := `UPDATE skills SET name=:name, description=:description, category=:category, version=:version, tags=:tags, triggers=:triggers,
+			  input_schema=:input_schema, output_schema=:output_schema, steps=:steps, permission_topology=:permission_topology, status=:status, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, skill)
 	return err
 }
@@ -79,8 +79,8 @@ func NewAuditLogRepository() *AuditLogRepository {
 func (r *AuditLogRepository) Create(log *models.AuditLog) error {
 	log.ID = uuid.New().String()
 	log.CreatedAt = time.Now()
-	
-	query := `INSERT INTO audit_logs (id, tenant_id, user_id, agent_id, tool, action, resource, detail, decision, result, duration_ms, ip, user_agent, created_at) 
+
+	query := `INSERT INTO audit_logs (id, tenant_id, user_id, agent_id, tool, action, resource, detail, decision, result, duration_ms, ip, user_agent, created_at)
 			  VALUES (:id, :tenant_id, :user_id, :agent_id, :tool, :action, :resource, :detail, :decision, :result, :duration_ms, :ip, :user_agent, :created_at)`
 	_, err := database.DB.NamedExec(query, log)
 	return err
@@ -115,8 +115,8 @@ func (r *SSOProviderRepository) Create(provider *models.SSOProvider) error {
 	provider.ID = uuid.New().String()
 	provider.CreatedAt = time.Now()
 	provider.UpdatedAt = time.Now()
-	
-	query := `INSERT INTO sso_providers (id, tenant_id, name, type, display_name, icon, enabled, config, created_at, updated_at) 
+
+	query := `INSERT INTO sso_providers (id, tenant_id, name, type, display_name, icon, enabled, config, created_at, updated_at)
 			  VALUES (:id, :tenant_id, :name, :type, :display_name, :icon, :enabled, :config, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, provider)
 	return err
