@@ -161,7 +161,7 @@ func (h *UsageHandler) GetUsageAnalytics(c *gin.Context) {
 		GROUP BY model_provider, model_name ORDER BY total_tokens DESC LIMIT 20`, modelWhere), modelArgs...)
 
 	_ = database.DB.Select(&resp.BySource, fmt.Sprintf(`
-		SELECT COALESCE(NULLIF(source,''),'unknown') name,
+		SELECT %s name,
 		       '' provider, '' model,
 		       COALESCE(SUM(input_tokens),0) input_tokens,
 		       COALESCE(SUM(output_tokens),0) output_tokens,
@@ -170,7 +170,7 @@ func (h *UsageHandler) GetUsageAnalytics(c *gin.Context) {
 		       COUNT(*) calls,
 		       COALESCE(ROUND(AVG(latency_ms)),0) avg_latency_ms
 		FROM model_usage %s
-		GROUP BY name ORDER BY total_tokens DESC`, modelWhere), modelArgs...)
+		GROUP BY name ORDER BY total_tokens DESC`, normalizedModelSourceExpr(), modelWhere), modelArgs...)
 
 	_ = database.DB.Select(&resp.ByTool, fmt.Sprintf(`
 		SELECT resource_type, resource_id, resource_name, source,
@@ -188,7 +188,7 @@ func (h *UsageHandler) GetUsageAnalytics(c *gin.Context) {
 	detailsArgs = append(detailsArgs, (filters.Page-1)*filters.PageSize, filters.PageSize)
 	_ = database.DB.Select(&resp.Details, fmt.Sprintf(`
 		SELECT * FROM (
-			SELECT 'model' kind, id, user_id, source, source_name,
+			SELECT 'model' kind, id, user_id, %s source, %s source_name,
 			       model_provider provider, model_name model,
 			       resource_type, resource_id, '' resource_name,
 			       input_tokens, output_tokens, cached_tokens, total_tokens, latency_ms,
@@ -202,7 +202,7 @@ func (h *UsageHandler) GetUsageAnalytics(c *gin.Context) {
 			       status, request_id, COALESCE(error_message,'') error_message, created_at
 			FROM tool_call_usage %s
 		) u
-		ORDER BY created_at DESC LIMIT ?, ?`, modelWhere, toolWhere), detailsArgs...)
+		ORDER BY created_at DESC LIMIT ?, ?`, normalizedModelSourceExpr(), normalizedModelSourceNameExpr(), modelWhere, toolWhere), detailsArgs...)
 
 	normalizeUsageAnalyticsResponse(&resp)
 	c.JSON(http.StatusOK, resp)
@@ -275,7 +275,7 @@ func buildModelUsageWhere(tenantID string, f usageAnalyticsFilters) (string, []a
 	clauses := []string{"tenant_id = ?", "created_at >= ?", "created_at < DATE_ADD(?, INTERVAL 1 DAY)"}
 	args := []any{tenantID, f.StartDate, f.EndDate}
 	if f.Source != "" {
-		clauses = append(clauses, "source = ?")
+		clauses = append(clauses, normalizedModelSourceExpr()+" = ?")
 		args = append(args, f.Source)
 	}
 	if f.ModelName != "" {
@@ -301,6 +301,14 @@ func buildToolUsageWhere(tenantID string, f usageAnalyticsFilters) (string, []an
 		args = append(args, f.ResourceType)
 	}
 	return "WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func normalizedModelSourceExpr() string {
+	return "CASE WHEN source IS NULL OR source='' OR source='unknown' THEN 'ai_assistant' ELSE source END"
+}
+
+func normalizedModelSourceNameExpr() string {
+	return "CASE WHEN source_name IS NULL OR source_name='' THEN CASE WHEN source IS NULL OR source='' OR source='unknown' THEN 'AI助手' ELSE source END ELSE source_name END"
 }
 
 func usagePeriodExpr(granularity string) string {
