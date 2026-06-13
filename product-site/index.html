@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>金地云 EASP｜企业级 AI 服务平台</title>
+  <meta name="description" content="金地云 EASP 是面向 B2B SaaS 的企业级 AI 服务平台，提供 API-to-MCP 网关、SSO、RBAC/ABAC、审计、记忆与 Skill 工作流能力。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #07080b;
+      --bg-2: #0d1017;
+      --panel: rgba(255,255,255,.045);
+      --panel-2: rgba(255,255,255,.075);
+      --line: rgba(255,255,255,.095);
+      --line-soft: rgba(255,255,255,.055);
+      --text: #f7f8ff;
+      --muted: #a7afc0;
+      --weak: #687084;
+      --brand: #6d72ff;
+      --brand-2: #00d4ff;
+      --green: #34d399;
+      --orange: #f59e0b;
+      --red: #fb7185;
+      --shadow: 0 24px 90px rgba(0,0,0,.42);
+      --radius: 24px;
+      --radius-sm: 14px;
+      --container: 1180px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 0%, rgba(109,114,255,.26), transparent 34%),
+        radial-gradient(circle at 84% 12%, rgba(0,212,255,.17), transparent 30%),
+        radial-gradient(circle at 70% 86%, rgba(52,211,153,.10), transparent 26%),
+        var(--bg);
+      overflow-x: hidden;
+      font-feature-settings: "cv01", "ss03";
+    }
+    a { color: inherit; text-decoration: none; }
+    .noise {
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      opacity: .18;
+      background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+      background-size: 46px 46px;
+      mask-image: radial-gradient(circle at center, black, transparent 82%);
+      z-index: 0;
+    }
+    .wrap { position: relative; z-index: 1; }
+    .container { max-width: var(--container); margin: 0 auto; padding: 0 22px; }
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(22px);
+      background: rgba(7,8,11,.72);
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .nav-inner { height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; letter-spacing: -.02em; }
+    .logo {
+      width: 36px; height: 36px; border-radius: 12px;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      box-shadow: 0 0 34px rgba(109,114,255,.42);
+      font-family: "JetBrains Mono", monospace;
+      color: white;
+      font-size: 15px;
+    }
+    .nav-links { display: flex; align-items: center; gap: 24px; color: var(--muted); font-size: 14px; font-weight: 510; }
+    .nav-links a:hover { color: var(--text); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 11px 18px;
+      color: var(--text);
+      background: rgba(255,255,255,.045);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      font-weight: 600;
+      font-size: 14px;
+      transition: .2s ease;
+      white-space: nowrap;
+    }
+    .btn:hover { transform: translateY(-1px); background: rgba(255,255,255,.075); border-color: rgba(255,255,255,.18); }
+    .btn-primary { border: 0; background: linear-gradient(135deg, var(--brand), #8b5cf6 52%, var(--brand-2)); box-shadow: 0 16px 45px rgba(109,114,255,.28); }
+    .btn-primary:hover { background: linear-gradient(135deg, #7d82ff, #a073ff 52%, #24dcff); }
+    .hero { padding: 96px 0 56px; text-align: center; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 8px 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.04);
+      color: #d7dcff;
+      font-size: 13px;
+      font-family: "JetBrains Mono", monospace;
+      margin-bottom: 26px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--green); box-shadow: 0 0 16px var(--green); }
+    h1 {
+      margin: 0 auto;
+      max-width: 980px;
+      font-size: clamp(46px, 7vw, 86px);
+      line-height: .96;
+      letter-spacing: -0.065em;
+      font-weight: 650;
+    }
+    .grad { background: linear-gradient(90deg, #fff, #cbd5ff 42%, #73e7ff 80%); -webkit-background-clip: text; color: transparent; }
+    .lead { max-width: 780px; margin: 28px auto 0; color: var(--muted); font-size: clamp(17px, 2vw, 21px); line-height: 1.72; letter-spacing: -.02em; }
+    .hero-actions { margin-top: 36px; display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; }
+    .metrics { margin-top: 58px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .metric, .card, .pricing-card, .demo-panel {
+      background: linear-gradient(180deg, rgba(255,255,255,.072), rgba(255,255,255,.032));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.07), var(--shadow);
+    }
+    .metric { padding: 20px; text-align: left; }
+    .metric strong { display: block; font-size: 28px; letter-spacing: -.04em; }
+    .metric span { display: block; margin-top: 5px; color: var(--weak); font-size: 13px; }
+    .section { padding: 74px 0; }
+    .section-head { max-width: 770px; margin-bottom: 34px; }
+    .kicker { color: #9aa3ff; font-family: "JetBrains Mono", monospace; font-size: 13px; letter-spacing: .02em; margin-bottom: 13px; }
+    h2 { margin: 0; font-size: clamp(31px, 4.2vw, 54px); line-height: 1.04; letter-spacing: -.052em; font-weight: 650; }
+    .section-head p { color: var(--muted); font-size: 18px; line-height: 1.68; margin: 18px 0 0; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .card { padding: 24px; min-height: 210px; }
+    .icon {
+      width: 42px; height: 42px; border-radius: 14px;
+      display: grid; place-items: center;
+      background: rgba(109,114,255,.16);
+      border: 1px solid rgba(109,114,255,.26);
+      margin-bottom: 18px;
+      font-family: "JetBrains Mono", monospace;
+      color: #bfc2ff;
+    }
+    .card h3 { margin: 0 0 10px; font-size: 19px; letter-spacing: -.025em; }
+    .card p { margin: 0; color: var(--muted); line-height: 1.62; font-size: 15px; }
+    .pain .card { background: linear-gradient(180deg, rgba(251,113,133,.10), rgba(255,255,255,.028)); }
+    .demo-panel { border-radius: var(--radius); padding: 22px; overflow: hidden; }
+    .terminal { background: #080a0f; border: 1px solid var(--line-soft); border-radius: 18px; overflow: hidden; text-align: left; }
+    .terminal-bar { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--line-soft); color: var(--weak); font-size: 12px; font-family: "JetBrains Mono", monospace; }
+    .balls { display: flex; gap: 7px; }
+    .balls i { width: 10px; height: 10px; border-radius: 999px; display: block; }
+    .code { padding: 22px; font-family: "JetBrains Mono", monospace; font-size: 13px; line-height: 1.82; color: #b7c0d8; overflow: auto; }
+    .code .c { color: #647087; } .code .g { color: var(--green); } .code .b { color: #7dd3fc; } .code .v { color: #c4b5fd; } .code .o { color: #fbbf24; }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 20px; }
+    .flow div { border: 1px solid var(--line); background: rgba(255,255,255,.04); border-radius: 16px; padding: 16px 12px; color: #d8def0; font-weight: 600; font-size: 14px; }
+    .flow small { display:block; color: var(--weak); font-weight: 400; margin-top: 5px; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+    .pill { padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; color: #d6dcf0; background: rgba(255,255,255,.04); font-size: 13px; }
+    .pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }
+    .pricing-card { padding: 24px; position: relative; overflow: hidden; }
+    .pricing-card.featured { border-color: rgba(109,114,255,.45); transform: translateY(-8px); background: linear-gradient(180deg, rgba(109,114,255,.18), rgba(255,255,255,.045)); }
+    .tag { display: inline-flex; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; color: #c7ceff; font-size: 12px; background: rgba(255,255,255,.04); margin-bottom: 16px; }
+    .price { font-size: 34px; font-weight: 700; letter-spacing: -.045em; margin: 12px 0 6px; }
+    .price small { color: var(--weak); font-size: 14px; font-weight: 500; letter-spacing: 0; }
+    .pricing-card p { color: var(--muted); line-height: 1.56; min-height: 48px; }
+    ul { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 10px; }
+    li { color: #c6cede; font-size: 14px; line-height: 1.5; display: flex; gap: 9px; }
+    li::before { content: "✓"; color: var(--green); font-weight: 700; }
+    .cta { padding: 78px 0 96px; }
+    .cta-box { border: 1px solid rgba(109,114,255,.32); border-radius: 32px; padding: 46px; background: radial-gradient(circle at 20% 10%, rgba(109,114,255,.28), transparent 34%), linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.035)); box-shadow: var(--shadow); display: grid; grid-template-columns: 1.4fr .6fr; gap: 24px; align-items: center; }
+    .cta-box p { color: var(--muted); font-size: 17px; line-height: 1.66; margin: 14px 0 0; }
+    footer { border-top: 1px solid var(--line-soft); padding: 26px 0; color: var(--weak); font-size: 13px; }
+    .footer-inner { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    @media (max-width: 980px) {
+      .nav-links { display: none; }
+      .metrics, .grid-3, .pricing { grid-template-columns: repeat(2, 1fr); }
+      .grid-2, .cta-box { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .pricing-card.featured { transform: none; }
+    }
+    @media (max-width: 640px) {
+      .hero { padding-top: 66px; }
+      .metrics, .grid-3, .pricing { grid-template-columns: 1fr; }
+      .card { min-height: auto; }
+      .cta-box { padding: 28px; border-radius: 24px; }
+      .btn { width: 100%; }
+      .hero-actions { width: 100%; }
+      .section { padding: 52px 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="wrap">
+    <nav class="nav">
+      <div class="container nav-inner">
+        <a class="brand" href="#top"><span class="logo">E</span><span>金地云 EASP</span></a>
+        <div class="nav-links">
+          <a href="#pain">客户痛点</a>
+          <a href="#solution">解决方案</a>
+          <a href="#features">产品特色</a>
+          <a href="#pricing">SaaS 价格</a>
+        </div>
+        <a class="btn btn-primary" href="#cta">预约演示</a>
+      </div>
+    </nav>
+
+    <header id="top" class="hero">
+      <div class="container">
+        <div class="eyebrow"><span class="dot"></span> ENTERPRISE AI SERVICE PLATFORM · API TO MCP</div>
+        <h1>把企业 API、权限和数据，安全地交给 <span class="grad">AI Agent</span></h1>
+        <p class="lead">金地云 EASP 是面向企业的 AI 服务中台：将内部 API 一键转为 MCP 工具，统一接入 SSO、RBAC/ABAC、审计、Token 用量、记忆与 Skill 工作流，让 AI 从“能聊天”变成“能办事、可管控、可交付”。</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#pricing">查看方案与价格</a>
+          <a class="btn" href="#solution">了解产品架构</a>
+        </div>
+        <div class="metrics">
+          <div class="metric"><strong>API → MCP</strong><span>把现有业务能力包装成 AI 可调用工具</span></div>
+          <div class="metric"><strong>SSO + RBAC</strong><span>统一身份认证、角色权限、工具级授权</span></div>
+          <div class="metric"><strong>审计闭环</strong><span>调用链路、Token、工具执行全程可追踪</span></div>
+          <div class="metric"><strong>Skill 引擎</strong><span>将高频业务沉淀为可复用自动化流程</span></div>
+        </div>
+      </div>
+    </header>
+
+    <section id="pain" class="section pain">
+      <div class="container">
+        <div class="section-head">
+          <div class="kicker">CUSTOMER PAINS</div>
+          <h2>企业想用 AI，但真正卡在“连接、安全、成本、落地”。</h2>
+          <p>多数 AI 项目停留在 Demo：业务系统割裂、接口无法被 Agent 理解、权限不可控、调用不可审计、Token 成本不透明，最终难以进入生产环境。</p>
+        </div>
+        <div class="grid-3">
+          <div class="card"><div class="icon">01</div><h3>系统多，AI 连不上</h3><p>CRM、ERP、工单、知识库、内部系统接口标准不一，AI 无法稳定调用真实业务能力。</p></div>
+          <div class="card"><div class="icon">02</div><h3>权限复杂，不敢开放</h3><p>不同租户、角色、部门、用户拥有不同数据边界，直接给大模型接 API 风险极高。</p></div>
+          <div class="card"><div class="icon">03</div><h3>无法追责，合规困难</h3><p>谁调用了哪个工具、读取了什么数据、消耗多少 Token、结果是否成功，缺少统一审计链路。</p></div>
+          <div class="card"><div class="icon">04</div><h3>PoC 好看，生产难用</h3><p>Agent 每次临场规划，稳定性不可控；复杂流程需要可复用、可测试、可版本化的 Skill。</p></div>
+          <div class="card"><div class="icon">05</div><h3>成本黑盒，预算失控</h3><p>模型调用、缓存命中、输入输出 Token、部门/用户/模型维度缺少清晰统计。</p></div>
+          <div class="card"><div class="icon">06</div><h3>供应商绑定，扩展受限</h3><p>不同模型、MCP Server、业务 API 接入方式不统一，后续替换模型或扩展工具成本高。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="solution" class="section">
+      <div class="container">
+        <div class="section-head">
+          <div class="kicker">SOLUTION</div>
+          <h2>一个企业级 AI 网关，统一连接业务系统与 AI Agent。</h2>
+          <p>后端做核心决策，前端做配置与可视化。EASP 将认证、权限、工具、记忆、Skill、审计与用量管理沉淀为标准平台能力。</p>
+        </div>
+        <div class="demo-panel">
+          <div class="terminal">
+            <div class="terminal-bar"><div class="balls"><i style="background:#fb7185"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><span>easp.ai-gateway/flow</span></div>
+            <div class="code">
+              <span class="c"># 业务系统无需重构，API 通过连接器注册</span><br>
+              <span class="b">connector</span>.<span class="g">discover</span>(openapi | mcp | rest) → <span class="v">tools/list</span><br>
+              <span class="b">auth</span>.<span class="g">enforce</span>(SSO + RBAC + ABAC + tenant boundary)<br>
+              <span class="b">agent</span>.<span class="g">call</span>(mcp_tool | skill | memory) → <span class="o">audit + usage + trace</span><br>
+              <span class="c"># 输出可解释、可计费、可追责</span>
+            </div>
+          </div>
+          <div class="flow">
+            <div>连接器<small>OpenAPI / MCP / REST</small></div>
+            <div>权限网关<small>租户 / 角色 / 用户</small></div>
+            <div>AI 助手<small>工具调用 + 记忆</small></div>
+            <div>Skill 引擎<small>流程编排 / 复用</small></div>
+            <div>审计用量<small>Trace / Token / 成本</small></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-head">
+          <div class="kicker">PRODUCT HIGHLIGHTS</div>
+          <h2>面向 B2B SaaS 的产品特色与卖点。</h2>
+          <p>既能快速接入客户现有系统，也能满足企业对安全、权限、审计、稳定性和成本治理的要求。</p>
+        </div>
+        <div class="grid-3">
+          <div class="card"><div class="icon">↔</div><h3>API-to-MCP 企业网关</h3><p>将客户已有 API 转换为标准 MCP 工具，支持 OpenAPI 导入、MCP Server 发现、REST 适配。</p></div>
+          <div class="card"><div class="icon">🔐</div><h3>企业身份与权限</h3><p>支持租户级 SSO、系统/租户两层角色、菜单权限、MCP 工具权限、Skill 权限与通配符授权。</p></div>
+          <div class="card"><div class="icon">◎</div><h3>工作流记忆与上下文</h3><p>记忆池按个人/团队/系统、会话/技能/知识分类，控制注入优先级与上下文长度。</p></div>
+          <div class="card"><div class="icon">⚙</div><h3>Skill 标准范式</h3><p>通过 Schema 驱动执行表单，Timeline 展示执行过程，让高频业务流程可配置、可测试、可复用。</p></div>
+          <div class="card"><div class="icon">📊</div><h3>Token 与成本分析</h3><p>展示输入、输出、缓存命中 Token，支持按模型、来源、工具、时间维度统计，为计费与优化提供依据。</p></div>
+          <div class="card"><div class="icon">🧭</div><h3>全链路审计</h3><p>记录用户、工具、动作、资源、结果、耗时与错误，满足企业内部风控、合规和客户交付要求。</p></div>
+        </div>
+        <div class="pill-row">
+          <span class="pill">多租户 SaaS</span><span class="pill">私有化部署</span><span class="pill">模型供应商可切换</span><span class="pill">移动端适配</span><span class="pill">API Key 嵌入式接入</span><span class="pill">Nginx + Go + React</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="section-head">
+          <div class="kicker">SCENARIOS</div>
+          <h2>优先切入这些高价值场景。</h2>
+        </div>
+        <div class="grid-2">
+          <div class="card"><h3>企业内部 AI 助手</h3><p>连接知识库、工单、CRM、ERP、审批等系统，员工用自然语言完成查询、创建、更新与流程编排。</p></div>
+          <div class="card"><h3>SaaS 产品 AI 化升级</h3><p>为传统 SaaS 增加可嵌入的 AI 助手、API Key、用户级权限继承和用量计费能力。</p></div>
+          <div class="card"><h3>行业解决方案交付</h3><p>围绕行业高频流程沉淀 Skill：客服、运维、销售、财务、人事、项目管理等。</p></div>
+          <div class="card"><h3>企业 MCP 能力市场</h3><p>将内部服务标准化为可授权、可审计、可复用的 MCP 工具，构建企业 AI 能力目录。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pricing" class="section">
+      <div class="container">
+        <div class="section-head">
+          <div class="kicker">SAAS PRICING · 初拟价格</div>
+          <h2>按企业成熟度分层，先低门槛接入，再扩展到平台化治理。</h2>
+          <p>以下为市场试运行建议价，可根据客户规模、模型成本、私有化要求和实施服务调整。</p>
+        </div>
+        <div class="pricing">
+          <div class="pricing-card">
+            <span class="tag">Starter</span>
+            <h3>团队试点版</h3>
+            <div class="price">¥3,999<small>/月</small></div>
+            <p>适合 1 个业务团队快速验证 AI 助手与 API 工具调用。</p>
+            <ul><li>1 个租户 / 20 用户</li><li>20 个 MCP/REST 工具</li><li>基础 RBAC 与审计</li><li>用量分析与模型配置</li></ul>
+          </div>
+          <div class="pricing-card featured">
+            <span class="tag">Growth · 推荐</span>
+            <h3>企业增长版</h3>
+            <div class="price">¥9,999<small>/月</small></div>
+            <p>适合多部门共用，开始沉淀 Skill 与企业 AI 能力目录。</p>
+            <ul><li>3 个租户 / 100 用户</li><li>100 个工具 + 50 个 Skill</li><li>SSO、角色权限、工具权限</li><li>高级 Token 与来源分析</li></ul>
+          </div>
+          <div class="pricing-card">
+            <span class="tag">Business</span>
+            <h3>商业专业版</h3>
+            <div class="price">¥29,999<small>/月</small></div>
+            <p>适合平台化运营、跨团队治理和客户级交付。</p>
+            <ul><li>10 个租户 / 500 用户</li><li>不限工具数量</li><li>ABAC、审计留存、API Key</li><li>专属实施支持与月度复盘</li></ul>
+          </div>
+          <div class="pricing-card">
+            <span class="tag">Enterprise</span>
+            <h3>私有化 / 专属版</h3>
+            <div class="price">¥120,000<small>起/年</small></div>
+            <p>适合强合规、数据不出域、需要深度集成的客户。</p>
+            <ul><li>私有化部署或专属集群</li><li>定制 SSO / 权限 / 审计</li><li>专属模型网关与内网 API</li><li>SLA 与交付服务包</li></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="cta" class="cta">
+      <div class="container">
+        <div class="cta-box">
+          <div>
+            <div class="kicker">READY FOR PILOT</div>
+            <h2>用 2 周时间，把一个真实业务流程 AI 化。</h2>
+            <p>建议从“高频查询 + 可控写操作 + 明确审计”的场景切入，例如工单助手、客户运营助手、内部知识与流程助手。</p>
+          </div>
+          <div style="display:grid; gap:12px; justify-items:stretch;">
+            <a class="btn btn-primary" href="mailto:sales@jindiyun.com?subject=预约 EASP 产品演示">预约产品演示</a>
+            <a class="btn" href="#features">查看核心能力</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="container footer-inner">
+        <span>© 2026 金地云 EASP · Enterprise AI Service Platform</span>
+        <span>API-to-MCP · SSO/RBAC · Skill Engine · Usage Analytics</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
