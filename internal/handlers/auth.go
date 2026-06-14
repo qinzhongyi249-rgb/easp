@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/auth"
@@ -30,15 +33,75 @@ func NewAuthHandler() *AuthHandler {
 // RegisterRequest 注册请求
 type RegisterRequest struct {
 	TenantID    string `json:"tenant_id" binding:"required"`
-	Email       string `json:"email" binding:"required,email"`
+	Email       string `json:"email"`
+	Phone       string `json:"phone"`
 	Password    string `json:"password" binding:"required,min=6"`
 	DisplayName string `json:"display_name"`
 }
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	TenantID string `json:"tenant_id"`
 	Password string `json:"password" binding:"required"`
+}
+
+var ErrTenantRequired = errors.New("tenant required for ambiguous login")
+
+var phoneCleanupRegexp = regexp.MustCompile(`[^0-9+]`)
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func normalizePhone(phone string) string {
+	return phoneCleanupRegexp.ReplaceAllString(strings.TrimSpace(phone), "")
+}
+
+func NormalizeLoginIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "@") {
+		return normalizeEmail(value)
+	}
+	return normalizePhone(value)
+}
+
+func (r *RegisterRequest) NormalizeAndValidateIdentity() error {
+	r.Email = normalizeEmail(r.Email)
+	r.Phone = normalizePhone(r.Phone)
+	if r.Email == "" && r.Phone == "" {
+		return errors.New("email or phone is required")
+	}
+	return nil
+}
+
+func (r LoginRequest) NormalizedIdentifier() string {
+	if r.Email != "" {
+		return NormalizeLoginIdentifier(r.Email)
+	}
+	return NormalizeLoginIdentifier(r.Phone)
+}
+
+func SelectLoginUser(users []models.User, tenantID string) (*models.User, error) {
+	if tenantID != "" {
+		for i := range users {
+			if users[i].TenantID == tenantID {
+				return &users[i], nil
+			}
+		}
+		return nil, errors.New("user not found in tenant")
+	}
+	if len(users) == 1 {
+		return &users[0], nil
+	}
+	if len(users) > 1 {
+		return nil, ErrTenantRequired
+	}
+	return nil, errors.New("user not found")
 }
 
 // RefreshRequest 刷新Token请求
@@ -60,10 +123,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// 检查邮箱是否已存在（包括已删除的用户，避免重复注册）
-	existingUser, _ := h.userRepo.GetByEmail(req.Email)
-	if existingUser != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+	if err := req.NormalizeAndValidateIdentity(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email or phone is required"})
 		return
 	}
 
@@ -73,6 +134,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant ID does not exist"})
 		return
+	}
+
+	// 检查租户内邮箱/手机号是否已存在
+	if req.Email != "" {
+		if existingUser, _ := h.userRepo.GetByTenantAndEmail(req.TenantID, req.Email); existingUser != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered in this tenant"})
+			return
+		}
+	}
+	if req.Phone != "" {
+		if existingUser, _ := h.userRepo.GetByTenantAndPhone(req.TenantID, req.Phone); existingUser != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Phone already registered in this tenant"})
+			return
+		}
 	}
 
 	// 检查租户状态
@@ -110,6 +185,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		TenantID:     tenant.ID,
 		Email:        req.Email,
 		DisplayName:  req.DisplayName,
+		Phone:        req.Phone,
 		PasswordHash: string(passwordHash),
 		Status:       "active",
 		
@@ -141,16 +217,34 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 查找用户（GetByEmail 已排除 deleted_at）
-	user, err := h.userRepo.GetByEmail(req.Email)
+	identifier := req.NormalizedIdentifier()
+	if identifier == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email or phone is required"})
+		return
+	}
+
+	// 按邮箱或手机号查找用户；未指定租户且匹配多个租户时要求使用租户专属登录地址
+	users, err := h.userRepo.ListByIdentifier(identifier)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
+		return
+	}
+	user, err := SelectLoginUser(users, req.TenantID)
+	if err != nil {
+		if errors.Is(err, ErrTenantRequired) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "This account exists in multiple tenants. Please use the specified tenant login URL.",
+				"code":  "TENANT_REQUIRED",
+			})
+			return
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
 		return
 	}
 
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
 		return
 	}
 
@@ -229,6 +323,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"id":           user.ID,
 			"tenant_id":    user.TenantID,
 			"email":        user.Email,
+			"phone":        user.Phone,
 			"display_name": user.DisplayName,
 			"status":       user.Status,
 			"is_admin":     isAdmin,

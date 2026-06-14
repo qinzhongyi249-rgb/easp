@@ -166,8 +166,38 @@ func (h *RoleHandler) UpdateRole(c *gin.Context) {
 		role.Tools = toPtr(req.Tools)
 	}
 	// allowed_mcp_tools 和 allowed_skills 支持清空（传 "[]" 表示清空）
-	role.AllowedMCPTools = toPtr(req.AllowedMCPTools)
-	role.AllowedSkills = toPtr(req.AllowedSkills)
+	allowedMCPTools := req.AllowedMCPTools
+	if IsTenantAdminRole(role) {
+		lockedIDs, err := GetLockedBuiltinMCPToolIDs(role.TenantID)
+		if err != nil {
+			log.Printf("Failed to load locked builtin MCP tools for role %s: %v", role.ID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load locked MCP tools"})
+			return
+		}
+		protected, err := ProtectedAllowedMCPToolsForRole(role, allowedMCPTools, lockedIDs)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		allowedMCPTools = protected
+	}
+	role.AllowedMCPTools = toPtr(allowedMCPTools)
+	allowedSkills := req.AllowedSkills
+	if IsTenantAdminRole(role) {
+		lockedSkillIDs, err := GetLockedBuiltinSkillIDs(role.TenantID)
+		if err != nil {
+			log.Printf("Failed to load locked builtin skills for role %s: %v", role.ID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load locked skills"})
+			return
+		}
+		protected, err := ProtectedAllowedSkillsForRole(role.TenantID, allowedSkills, lockedSkillIDs)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		allowedSkills = protected
+	}
+	role.AllowedSkills = toPtr(allowedSkills)
 	if req.RateLimit != "" {
 		role.RateLimit = toPtr(req.RateLimit)
 	}
@@ -352,6 +382,11 @@ func InitTenantDefaultRoles(tenantID string) {
 			log.Printf("Tenant role created: %s for tenant %s", def.name, tenantID)
 		}
 	}
+
+	if _, err := EnsureTenantBuiltinMCPTools(tenantID); err != nil {
+		log.Printf("Failed to ensure tenant builtin MCP tools for %s: %v", tenantID, err)
+	}
+	EnsureTenantBuiltinSkillsOrLog(tenantID)
 }
 
 // ensureAdminRole 确保admin用户拥有系统管理员角色

@@ -126,9 +126,15 @@
 - ✅ MCP消息路由
 - ✅ MCP会话管理 (SSE连接)
 - ✅ API转MCP (OpenAPI规范解析 v2.0/v3.0)
+- ✅ RESTful 单接口导入生成 MCP 工具：支持方法/路径/Schema/生命周期/风险/启用配置，默认草稿且未启用；层面3校验路径必须以 `/` 开头、`required` 必须存在于 `properties`、导入后启用只允许 `published`
+- ✅ 内置治理 MCP 工具扩展：支持 `curl` 先测试再创建工具、AI 助手内置创建/更新 Skill，默认给租户管理员角色且锁定不可改
+- ✅ AI 助手执行体验优化：状态/心跳/工具结果/模型增量输出会刷新活动时间，避免长流程固定超时误杀；系统提示词和上下文更精简，记忆召回并行加载并使用关键词+向量混合召回
+- ✅ Skill 并发编排与内置业务流程：SkillEngine 支持 `parallel` 并发步骤和 `required` 缺参追问；内置“创建用户/创建角色/创建MCP工具”流程默认授权管理员且不可编辑/删除；AI 助手会先做权限预检，权限不足时直接提示缺少的中文权限项，不再追问业务必填项；创建用户不收集明文密码；创建MCP工具强制先测试 curl 再创建 draft/disabled 工具
 - ✅ 自动生成MCP工具定义
 - ✅ 参数映射引擎
 - ✅ 响应转换器
+- ✅ 生命周期状态：`draft/testing/published/disabled`，兼容旧 `active/archived`
+- ✅ 执行模式：`sandbox/dry_run/production`，正式执行仅允许已发布工具
 
 **MCP网关端点**:
 | API | 方法 | 路径 | 说明 |
@@ -157,6 +163,13 @@
 | 获取执行记录 | GET | /api/v1/skill-executions/:executionId | 获取执行详情 |
 | 列出执行记录 | GET | /api/v1/tenants/:tenantId/skill-executions | 列出执行历史 |
 
+**生命周期与沙箱**:
+- ✅ Skill/MCP 默认 `draft`，AI 与手动测试默认 `sandbox`
+- ✅ `production` 只允许 `published`，`disabled` 禁止执行
+- ✅ `sandbox/dry_run` 跳过 MCP/HTTP 外部副作用，执行记录写入 `execution_mode`
+- ✅ 前端测试弹窗默认沙箱，结果与历史展示执行模式
+- 📄 设计说明：`docs/SKILL_MCP_LIFECYCLE.md`
+
 **数据库表**:
 - ✅ skill_executions (AutoMigrate)
 
@@ -169,6 +182,23 @@
 | 创建条目 | POST | /api/v1/memory-pools/:poolId/entries | 创建记忆条目 |
 | 列出条目 | GET | /api/v1/memory-pools/:poolId/entries | 列出条目 |
 | 搜索条目 | GET | /api/v1/memory-pools/:poolId/entries/search | 搜索记忆 |
+
+**记忆治理（层面1）**:
+- ✅ 写入去重：`tenant_id + user_id + type + content_hash` 唯一指纹，重复内容不再新增，更新 `last_seen_at/access_count`。
+- ✅ 自动提取/召回/敏感过滤/审计开关：`memory_settings` 支持租户级与用户级覆盖。
+- ✅ 敏感信息过滤：仅作用于持久化、审计、召回展示链路，不处理实时工具调用参数，避免影响 MCP/Skill 调度。
+- ✅ 记忆审计：`memory_audit_logs` 记录 created/deduplicated/redacted/blocked_sensitive/vector_indexed/vector_index_failed 等动作。
+- ✅ 混合检索预留：长期记忆写入 MySQL 后异步写入向量库，后续召回可按关键词 + 向量语义合并排序。
+
+**记忆治理（层面2）**:
+- ✅ 记忆衰减评分：按 `last_accessed_at/last_seen_at/created_at/access_count/type` 计算召回分。
+- ✅ 记忆合并策略：高相似无冲突内容合并，冲突内容保留并写审计。
+- ✅ 召回排序增强：从单纯 `created_at DESC` 升级为 `keyword_score + recency_score + frequency_score + type_weight`，预留 `vector_score` 合并入口。
+
+**记忆治理（层面3）**:
+- ✅ 混合检索融合：将向量召回分与关键词/衰减/频次/类型权重合并排序，向量服务失败时明确降级到关键词召回。
+- ✅ 召回解释：为每条召回记忆输出 keyword/vector/recency/frequency/type/final 分数组成，便于调试和前端展示。
+- ✅ 记忆容量限制：按租户/用户/类型容量归档低价值记忆，并写入审计。
 
 ### 11. 向量记忆 ✅ (基础实现)
 
@@ -219,6 +249,8 @@
 - ✅ 实时滚动计时
 - ✅ 模型信息展示 (model/display_name/provider)
 - ✅ 工具执行结果展示
+- ✅ 上下文承接协议：`conversation_id` + 服务端会话历史 + `page_context`
+- ✅ `/assistant` 页面与 `FloatingAssistant` 统一请求协议，前端只传事实型页面上下文，后端负责理解和决策
 
 **内置工具**:
 - list_users: 获取用户列表
@@ -320,10 +352,18 @@
 | tenant_sso_configs | 租户SSO配置表 | ✅ |
 | model_providers | 模型提供商表 | ✅ |
 | model_configs | 模型配置表 | ✅ |
+| assistant_conversations | AI助手会话元数据/页面上下文 | ✅ |
+| session_memories | AI助手会话消息历史/短期记忆 | ✅ |
 
 ---
 
-## 三、技术架构
+### 19. 私有化部署文档 ✅
+
+- ✅ 已补充 `docs/PRIVATE_DEPLOYMENT.md`
+- ✅ 覆盖部署形态、硬件规格、软件依赖、目录规划、配置文件、Nginx、systemd、数据库、部署步骤、安全要求、备份恢复、发布回滚和验收清单
+- ✅ 明确私有化交付前整改项：数据库/JWT Secret 外部化、清理敏感示例、部署模板化、凭据加密存储
+
+## 四、技术架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -350,8 +390,8 @@
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                      MySQL (阿里云RDS)                       │
-│            rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei            │
+│                      MySQL / RDS                             │
+│                      <mysql-host>                            │
 └─────────────────────────────────────────────────────────────┘
                               │
               ┌───────────────┼───────────────┐
@@ -406,5 +446,5 @@ npm run build                         # 构建生产版本
 |------|------|------|
 | 默认模型 | mimo-v2.5-pro | 小米供应商 |
 | 模型Base URL | https://token-plan-sgp.xiaomimimo.com/v1 | 小米MIMO API |
-| 默认账号 | admin@easp.com / admin123 | 系统管理员 |
-| CodeServer密码 | easp2026 | CodeServer访问密码 |
+| 默认账号 | <admin-email> / <initial-password> | 系统管理员，首次登录后必须修改 |
+| CodeServer密码 | <codeserver-password> | 仅开发环境，如启用需独立设置 |

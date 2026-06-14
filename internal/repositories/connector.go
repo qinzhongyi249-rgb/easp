@@ -5,6 +5,7 @@ import (
 
 	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/models"
+	"github.com/easp-platform/easp/internal/skill"
 	"github.com/google/uuid"
 )
 
@@ -19,9 +20,9 @@ func (r *ConnectorRepository) Create(connector *models.Connector) error {
 	connector.ID = uuid.New().String()
 	connector.CreatedAt = time.Now()
 	connector.UpdatedAt = time.Now()
-	
-	query := `INSERT INTO connectors (id, tenant_id, name, type, base_url, transport_type, mcp_server_url, headers, auth_type, auth_config, spec_url, spec_content, status, tools_count, last_sync_at, created_at, updated_at) 
-			  VALUES (:id, :tenant_id, :name, :type, :base_url, :transport_type, :mcp_server_url, :headers, :auth_type, :auth_config, :spec_url, :spec_content, :status, :tools_count, :last_sync_at, :created_at, :updated_at)`
+
+	query := `INSERT INTO connectors (id, tenant_id, name, type, base_url, transport_type, mcp_server_url, headers, auth_type, auth_config, credential_mode, user_token_header, user_token_prefix, user_token_required_sso, spec_url, spec_content, status, tools_count, last_sync_at, created_at, updated_at)
+			  VALUES (:id, :tenant_id, :name, :type, :base_url, :transport_type, :mcp_server_url, :headers, :auth_type, :auth_config, :credential_mode, :user_token_header, :user_token_prefix, :user_token_required_sso, :spec_url, :spec_content, :status, :tools_count, :last_sync_at, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, connector)
 	return err
 }
@@ -43,7 +44,7 @@ func (r *ConnectorRepository) ListByTenant(tenantID string) ([]models.Connector,
 
 func (r *ConnectorRepository) Update(connector *models.Connector) error {
 	connector.UpdatedAt = time.Now()
-	query := `UPDATE connectors SET name=:name, type=:type, base_url=:base_url, transport_type=:transport_type, mcp_server_url=:mcp_server_url, headers=:headers, auth_type=:auth_type, auth_config=:auth_config, 
+	query := `UPDATE connectors SET name=:name, type=:type, base_url=:base_url, transport_type=:transport_type, mcp_server_url=:mcp_server_url, headers=:headers, auth_type=:auth_type, auth_config=:auth_config, credential_mode=:credential_mode, user_token_header=:user_token_header, user_token_prefix=:user_token_prefix, user_token_required_sso=:user_token_required_sso,
 			  spec_url=:spec_url, spec_content=:spec_content, status=:status, tools_count=:tools_count, last_sync_at=:last_sync_at, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, connector)
 	return err
@@ -69,9 +70,14 @@ func NewMCPToolRepository() *MCPToolRepository {
 func (r *MCPToolRepository) Create(tool *models.MCPTool) error {
 	tool.ID = uuid.New().String()
 	tool.CreatedAt = time.Now()
-	
-	query := `INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, enabled, created_at) 
-			  VALUES (:id, :tenant_id, :connector_id, :name, :description, :input_schema, :backend_method, :backend_path, :risk_level, :enabled, :created_at)`
+	tool.UpdatedAt = time.Now()
+	tool.Status = skill.NormalizeSkillStatus(tool.Status)
+	if tool.RiskLevel == "" {
+		tool.RiskLevel = "medium"
+	}
+
+	query := `INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, status, enabled, is_builtin, locked, created_at, updated_at)
+			  VALUES (:id, :tenant_id, :connector_id, :name, :description, :input_schema, :backend_method, :backend_path, :risk_level, :status, :enabled, :is_builtin, :locked, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, tool)
 	return err
 }
@@ -108,13 +114,18 @@ func (r *MCPToolRepository) ListByTenant(tenantID string) ([]models.MCPTool, err
 
 func (r *MCPToolRepository) ListEnabled(tenantID string) ([]models.MCPTool, error) {
 	var tools []models.MCPTool
-	err := database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true ORDER BY name", tenantID)
+	err := database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true AND status IN ('published', 'active') ORDER BY name", tenantID)
 	return tools, err
 }
 
 func (r *MCPToolRepository) Update(tool *models.MCPTool) error {
-	query := `UPDATE mcp_tools SET name=:name, description=:description, input_schema=:input_schema, 
-			  backend_method=:backend_method, backend_path=:backend_path, risk_level=:risk_level, enabled=:enabled WHERE id=:id`
+	tool.UpdatedAt = time.Now()
+	tool.Status = skill.NormalizeSkillStatus(tool.Status)
+	if tool.RiskLevel == "" {
+		tool.RiskLevel = "medium"
+	}
+	query := `UPDATE mcp_tools SET name=:name, description=:description, input_schema=:input_schema,
+			  backend_method=:backend_method, backend_path=:backend_path, risk_level=:risk_level, status=:status, enabled=:enabled, is_builtin=:is_builtin, locked=:locked, updated_at=:updated_at WHERE id=:id`
 	_, err := database.DB.NamedExec(query, tool)
 	return err
 }
@@ -125,6 +136,6 @@ func (r *MCPToolRepository) Delete(id string) error {
 }
 
 func (r *MCPToolRepository) ToggleEnabled(id string, enabled bool) error {
-	_, err := database.DB.Exec("UPDATE mcp_tools SET enabled = ? WHERE id = ?", enabled, id)
+	_, err := database.DB.Exec("UPDATE mcp_tools SET enabled = ?, updated_at = ? WHERE id = ?", enabled, time.Now(), id)
 	return err
 }

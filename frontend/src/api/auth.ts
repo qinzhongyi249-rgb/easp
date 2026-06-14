@@ -1,13 +1,16 @@
 import client from './client';
 
 export interface LoginParams {
-  email: string;
+  email?: string;
+  phone?: string;
+  tenant_id?: string;
   password: string;
 }
 
 export interface RegisterParams {
   tenant_id: string;
-  email: string;
+  email?: string;
+  phone?: string;
   password: string;
   display_name?: string;
 }
@@ -16,6 +19,7 @@ export interface User {
   id: string;
   tenant_id: string;
   email: string;
+  phone?: string;
   display_name: string;
   status: string;
   is_admin?: boolean;

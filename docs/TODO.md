@@ -72,6 +72,11 @@
 - [x] 自动生成MCP工具定义
 - [x] 参数映射引擎
 - [x] 响应转换器
+- [x] RESTful API 单接口导入生成 MCP 工具：支持 GET/POST/PUT/PATCH/DELETE 方法、路径、参数 Schema 与状态配置；层面2已补充 input_schema 严格 JSON 校验、生命周期/风险/启用配置，默认草稿且未启用，避免直接暴露生产调用；层面3已补充路径必须以 `/` 开头、required 必须存在于 properties、导入后启用只允许 published
+- [x] 内置治理 MCP 工具扩展：支持 `curl` 导入先测试再创建 MCP 工具，AI 助手可复用；支持 AI 助手内置创建/更新 Skill；默认授权租户管理员角色且不可取消/删除/停用/编辑
+- [x] AI 助手超时与理解效率优化：状态/心跳/工具结果/模型增量输出刷新活动时间；连续工具调用上限从 5 轮提升到 8 轮并明确提示“步骤上限”；精简系统提示词、限制历史与技能上下文；记忆召回并行加载并继续使用关键词+向量混合召回
+- [x] Skill 编排能力增强：支持 `parallel` 并发步骤和 `required` 缺参追问；新增内置创建用户/创建角色/创建MCP工具流程 Skill，管理员默认授权且后端保留权限；内置 Skill 不可编辑/删除；AI 助手先做权限预检，权限不足时提示缺少的中文权限项，不再追问业务必填项；缺参追问字段使用中文口语化标签；创建用户流程不收集明文密码；创建MCP工具流程强制先测试 curl 再基于测试结果创建 draft/disabled 工具
+- [ ] 连接器用户身份透传：支持将当前 SSO 登录用户 Token 动态注入下游 REST/MCP 调用 Header，标准登录无 Token 时明确报错
 
 ### 3.3 MCP工具调用
 - [x] 工具调用链路
@@ -111,6 +116,8 @@
 - [x] Tool Calling (工具调用)
 - [x] 权限过滤工具列表
 - [x] 系统提示词生成
+- [x] 上下文承接协议：`conversation_id`、服务端会话历史、`page_context`
+- [x] `/assistant` 与 `FloatingAssistant` 统一请求协议
 
 ### 5.2 链路追踪
 - [x] 气泡链路追踪 (TraceTimeline)
@@ -176,10 +183,17 @@
 - [ ] 向量相似度搜索优化
 
 ### 7.2 记忆管理增强
-- [ ] 记忆衰减算法
-- [ ] 记忆合并策略
-- [ ] 记忆优先级排序
-- [ ] 记忆容量限制
+- [x] 记忆写入去重（`content_hash` 指纹 + 重复更新 last_seen/access_count）
+- [x] 自动提取/召回/敏感过滤/审计开关（`memory_settings`）
+- [x] 敏感信息过滤（只作用于持久化/审计/召回，不影响工具调度）
+- [x] 记忆审计日志（`memory_audit_logs`）
+- [x] 混合检索索引预留（长期记忆异步写入向量库，支持后续 keyword+vector 召回）
+- [x] 记忆衰减算法（层面2：按最近访问/出现/创建时间、访问次数、类型权重动态评分）
+- [x] 记忆合并策略（层面2：高相似无冲突内容合并，冲突内容保留并审计）
+- [x] 记忆优先级排序（层面2：keyword + recency + frequency + type_weight，预留 vector_score）
+- [x] 混合检索融合（层面3：keyword + vector + 衰减评分融合，向量服务失败明确降级）
+- [x] 召回解释（层面3：返回/记录 keyword、vector、recency、frequency、type 权重组成）
+- [x] 记忆容量限制（层面3：超出容量后归档低价值记忆，保留审计）
 - [ ] 记忆分类标签
 
 ### 7.3 上下文注入
@@ -202,6 +216,8 @@
 - [x] MCP tool执行器
 - [x] 可视化测试执行面板
 - [x] 执行记录持久化 (skill_executions)
+- [x] Skill/MCP 生命周期：`draft/testing/published/disabled`，兼容旧 `active/archived`
+- [x] 执行模式：测试默认 `sandbox`，`production` 仅允许 `published`，执行记录写入 `execution_mode`
 - [ ] 条件分支支持
 - [ ] 循环执行支持
 - [ ] 并行步骤执行

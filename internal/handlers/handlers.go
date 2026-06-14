@@ -15,6 +15,7 @@ import (
 	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/repositories"
+	skillpkg "github.com/easp-platform/easp/internal/skill"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -577,6 +578,15 @@ func (h *MCPToolHandler) Create(c *gin.Context) {
 		return
 	}
 	tool.TenantID = tenantID
+	if tool.Status == "" {
+		tool.Status = skillpkg.SkillStatusDraft
+	}
+	if tool.RiskLevel == "" {
+		tool.RiskLevel = "medium"
+	}
+
+	tool.IsBuiltin = false
+	tool.Locked = false
 
 	if err := h.repo.Create(&tool); err != nil {
 		log.Printf("Failed to create MCP tool: %v", err)
@@ -631,6 +641,11 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if err := EnsureMCPToolMutable(existing); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+
 	var req models.MCPTool
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -640,6 +655,8 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 	// 保留服务端权威字段，避免前端未传 id/tenant_id/connector_id 时被零值覆盖。
 	req.ID = existing.ID
 	req.TenantID = existing.TenantID
+	req.IsBuiltin = existing.IsBuiltin
+	req.Locked = existing.Locked
 	if req.ConnectorID == "" {
 		req.ConnectorID = existing.ConnectorID
 	}
@@ -655,6 +672,9 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 	if req.RiskLevel == "" {
 		req.RiskLevel = existing.RiskLevel
 	}
+	if req.Status == "" {
+		req.Status = existing.Status
+	}
 
 	if err := h.repo.Update(&req); err != nil {
 		log.Printf("Failed to update MCP tool: %v", err)
@@ -668,6 +688,15 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 // Delete 删除MCP工具
 func (h *MCPToolHandler) Delete(c *gin.Context) {
 	toolID := c.Param("toolId")
+	existing, err := h.repo.GetByID(toolID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "MCP tool not found"})
+		return
+	}
+	if err := EnsureMCPToolMutable(existing); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.repo.Delete(toolID); err != nil {
 		log.Printf("Failed to delete MCP tool: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete MCP tool", "details": err.Error()})
@@ -679,6 +708,15 @@ func (h *MCPToolHandler) Delete(c *gin.Context) {
 // ToggleEnabled 切换启用状态
 func (h *MCPToolHandler) ToggleEnabled(c *gin.Context) {
 	toolID := c.Param("toolId")
+	existing, err := h.repo.GetByID(toolID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "MCP tool not found"})
+		return
+	}
+	if err := EnsureMCPToolMutable(existing); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
 	enabledStr := c.Query("enabled")
 	enabled, _ := strconv.ParseBool(enabledStr)
 
@@ -809,7 +847,9 @@ func (h *SkillHandler) ListByTenant(c *gin.Context) {
 	var skills []models.Skill
 	var err error
 
-	if status != "" {
+	if status == "usable" {
+		skills, err = h.repo.ListUsable(tenantID)
+	} else if status != "" {
 		skills, err = h.repo.ListByStatus(tenantID, status)
 	} else {
 		skills, err = h.repo.ListByTenant(tenantID)
@@ -829,12 +869,21 @@ func (h *SkillHandler) ListByTenant(c *gin.Context) {
 	c.JSON(http.StatusOK, skills)
 }
 
+func isSystemBuiltinSkill(sk *models.Skill) bool {
+	return sk != nil && sk.CreatedBy != nil && *sk.CreatedBy == "system"
+}
+
 // Update 更新Skill
 func (h *SkillHandler) Update(c *gin.Context) {
 	skillID := c.Param("skillId")
 	skill, err := h.repo.GetByID(skillID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
+		return
+	}
+
+	if isSystemBuiltinSkill(skill) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "内置技能不可编辑"})
 		return
 	}
 
@@ -855,6 +904,15 @@ func (h *SkillHandler) Update(c *gin.Context) {
 // Delete 删除Skill
 func (h *SkillHandler) Delete(c *gin.Context) {
 	skillID := c.Param("skillId")
+	skill, err := h.repo.GetByID(skillID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
+		return
+	}
+	if isSystemBuiltinSkill(skill) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "内置技能不可删除"})
+		return
+	}
 	if err := h.repo.Delete(skillID); err != nil {
 		log.Printf("Failed to delete skill: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete skill", "details": err.Error()})

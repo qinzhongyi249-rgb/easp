@@ -97,11 +97,13 @@ type TenantSSOConfig struct {
 type User struct {
 	ID           string     `db:"id" json:"id"`
 	TenantID     string     `db:"tenant_id" json:"tenant_id"`
-	Email        string     `db:"email" json:"email"`
-	DisplayName  string     `db:"display_name" json:"display_name"`
-	Avatar       string     `db:"avatar" json:"avatar"`
-	Phone        string     `db:"phone" json:"phone"`
-	Status       string     `db:"status" json:"status"`
+	Email          string  `db:"email" json:"email"`
+	EmailUniqueKey *string `db:"email_unique_key" json:"-"`
+	DisplayName    string  `db:"display_name" json:"display_name"`
+	Avatar         string  `db:"avatar" json:"avatar"`
+	Phone          string  `db:"phone" json:"phone"`
+	PhoneUniqueKey *string `db:"phone_unique_key" json:"-"`
+	Status         string  `db:"status" json:"status"`
 	PasswordHash string     `db:"password_hash" json:"-"`
 	SSOProvider  string     `db:"sso_provider" json:"sso_provider"`
 	SSOUserID    string     `db:"sso_user_id" json:"sso_user_id"`
@@ -139,23 +141,27 @@ type UserRole struct {
 
 // Connector 连接器模型
 type Connector struct {
-	ID            string     `db:"id" json:"id"`
-	TenantID      string     `db:"tenant_id" json:"tenant_id"`
-	Name          string     `db:"name" json:"name"`
-	Type          string     `db:"type" json:"type"`
-	BaseURL       string     `db:"base_url" json:"base_url"`
-	TransportType *string    `db:"transport_type" json:"transport_type,omitempty"` // sse / streamable_http，MCP传输方式
-	MCPServerURL  *string    `db:"mcp_server_url" json:"mcp_server_url,omitempty"`
-	Headers       *string    `db:"headers" json:"headers,omitempty"` // JSON: 自定义HTTP头
-	AuthType      *string    `db:"auth_type" json:"auth_type,omitempty"`
-	AuthConfig    *string    `db:"auth_config" json:"auth_config,omitempty"`
-	SpecURL       *string    `db:"spec_url" json:"spec_url,omitempty"`
-	SpecContent   *string    `db:"spec_content" json:"spec_content,omitempty"`
-	Status        string     `db:"status" json:"status"`
-	ToolsCount    int        `db:"tools_count" json:"tools_count"`
-	LastSyncAt    *time.Time `db:"last_sync_at" json:"last_sync_at,omitempty"`
-	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
+	ID                   string     `db:"id" json:"id"`
+	TenantID             string     `db:"tenant_id" json:"tenant_id"`
+	Name                 string     `db:"name" json:"name"`
+	Type                 string     `db:"type" json:"type"`
+	BaseURL              string     `db:"base_url" json:"base_url"`
+	TransportType        *string    `db:"transport_type" json:"transport_type,omitempty"` // sse / streamable_http，MCP传输方式
+	MCPServerURL         *string    `db:"mcp_server_url" json:"mcp_server_url,omitempty"`
+	Headers              *string    `db:"headers" json:"headers,omitempty"` // JSON: 自定义HTTP头
+	AuthType             *string    `db:"auth_type" json:"auth_type,omitempty"`
+	AuthConfig           *string    `db:"auth_config" json:"auth_config,omitempty"`
+	CredentialMode       *string    `db:"credential_mode" json:"credential_mode,omitempty"` // static / user_token / none
+	UserTokenHeader      *string    `db:"user_token_header" json:"user_token_header,omitempty"`
+	UserTokenPrefix      *string    `db:"user_token_prefix" json:"user_token_prefix,omitempty"`
+	UserTokenRequiredSSO bool       `db:"user_token_required_sso" json:"user_token_required_sso"`
+	SpecURL              *string    `db:"spec_url" json:"spec_url,omitempty"`
+	SpecContent          *string    `db:"spec_content" json:"spec_content,omitempty"`
+	Status               string     `db:"status" json:"status"`
+	ToolsCount           int        `db:"tools_count" json:"tools_count"`
+	LastSyncAt           *time.Time `db:"last_sync_at" json:"last_sync_at,omitempty"`
+	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // MCPTool MCP工具模型
@@ -169,8 +175,12 @@ type MCPTool struct {
 	BackendMethod *string   `db:"backend_method" json:"backend_method,omitempty"`
 	BackendPath   *string   `db:"backend_path" json:"backend_path,omitempty"`
 	RiskLevel     string    `db:"risk_level" json:"risk_level"`
+	Status        string    `db:"status" json:"status"`
 	Enabled       bool      `db:"enabled" json:"enabled"`
+	IsBuiltin     bool      `db:"is_builtin" json:"is_builtin"`
+	Locked        bool      `db:"locked" json:"locked"`
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // MemoryPool 记忆池模型 - 记忆的"作用域" + "检索策略"
@@ -218,7 +228,7 @@ type Skill struct {
 	OutputSchema       *string    `db:"output_schema" json:"output_schema,omitempty"` // JSON Schema: 输出定义
 	Steps              string     `db:"steps" json:"steps"`                           // JSON数组: 执行步骤定义
 	PermissionTopology *string    `db:"permission_topology" json:"permission_topology,omitempty"`
-	Status             string     `db:"status" json:"status"`           // draft/active/archived
+	Status             string     `db:"status" json:"status"`           // draft/testing/published/disabled，兼容旧active=published
 	UsageCount         int        `db:"usage_count" json:"usage_count"` // 使用次数
 	LastUsedAt         *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
 	CreatedBy          *string    `db:"created_by" json:"created_by,omitempty"`

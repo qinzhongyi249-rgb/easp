@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -20,7 +21,7 @@ func (r *TenantRepository) Create(tenant *models.Tenant) error {
 	tenant.CreatedAt = time.Now()
 	tenant.UpdatedAt = time.Now()
 
-	query := `INSERT INTO tenants (id, name, plan, status, expires_at, max_users, created_at, updated_at) 
+	query := `INSERT INTO tenants (id, name, plan, status, expires_at, max_users, created_at, updated_at)
 			  VALUES (:id, :name, :plan, :status, :expires_at, :max_users, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, tenant)
 	return err
@@ -64,13 +65,14 @@ func (r *UserRepository) Create(user *models.User) error {
 	user.ID = uuid.New().String()
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
+	setUserUniqueKeys(user)
 	if user.Metadata == nil {
 		defaultMeta := "{}"
 		user.Metadata = &defaultMeta
 	}
 
-	query := `INSERT INTO users (id, tenant_id, email, display_name, avatar, phone, status, password_hash, sso_provider, sso_user_id, sso_linked_at, metadata, last_login_at, login_count, deleted_at, created_at, updated_at) 
-			  VALUES (:id, :tenant_id, :email, :display_name, :avatar, :phone, :status, :password_hash, :sso_provider, :sso_user_id, :sso_linked_at, :metadata, :last_login_at, :login_count, :deleted_at, :created_at, :updated_at)`
+	query := `INSERT INTO users (id, tenant_id, email, email_unique_key, display_name, avatar, phone, phone_unique_key, status, password_hash, sso_provider, sso_user_id, sso_linked_at, metadata, last_login_at, login_count, deleted_at, created_at, updated_at)
+			  VALUES (:id, :tenant_id, :email, :email_unique_key, :display_name, :avatar, :phone, :phone_unique_key, :status, :password_hash, :sso_provider, :sso_user_id, :sso_linked_at, :metadata, :last_login_at, :login_count, :deleted_at, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, user)
 	return err
 }
@@ -102,6 +104,34 @@ func (r *UserRepository) GetByEmail(email string) (*models.User, error) {
 	return &user, nil
 }
 
+func (r *UserRepository) GetByTenantAndEmail(tenantID, email string) (*models.User, error) {
+	var user models.User
+	err := database.DB.Get(&user, "SELECT * FROM users WHERE tenant_id = ? AND email = ? AND deleted_at IS NULL", tenantID, email)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) GetByTenantAndPhone(tenantID, phone string) (*models.User, error) {
+	var user models.User
+	err := database.DB.Get(&user, "SELECT * FROM users WHERE tenant_id = ? AND phone = ? AND deleted_at IS NULL", tenantID, phone)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) ListByIdentifier(identifier string) ([]models.User, error) {
+	if identifier == "" {
+		return nil, sql.ErrNoRows
+	}
+	var users []models.User
+	query := `SELECT * FROM users WHERE deleted_at IS NULL AND (email = ? OR phone = ?) ORDER BY created_at DESC`
+	err := database.DB.Select(&users, query, identifier, identifier)
+	return users, err
+}
+
 func (r *UserRepository) ListByTenant(tenantID string) ([]models.User, error) {
 	var users []models.User
 	err := database.DB.Select(&users, "SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", tenantID)
@@ -117,11 +147,25 @@ func (r *UserRepository) ListByTenantIncludeDeleted(tenantID string) ([]models.U
 
 func (r *UserRepository) Update(user *models.User) error {
 	user.UpdatedAt = time.Now()
-	query := `UPDATE users SET email=:email, display_name=:display_name, avatar=:avatar, phone=:phone, 
-			  status=:status, password_hash=:password_hash, metadata=:metadata, last_login_at=:last_login_at, login_count=:login_count, updated_at=:updated_at 
+	setUserUniqueKeys(user)
+	query := `UPDATE users SET email=:email, email_unique_key=:email_unique_key, display_name=:display_name, avatar=:avatar, phone=:phone, phone_unique_key=:phone_unique_key,
+			  status=:status, password_hash=:password_hash, metadata=:metadata, last_login_at=:last_login_at, login_count=:login_count, updated_at=:updated_at
 			  WHERE id=:id`
 	_, err := database.DB.NamedExec(query, user)
 	return err
+}
+
+func setUserUniqueKeys(user *models.User) {
+	user.EmailUniqueKey = nil
+	if user.Email != "" {
+		v := user.TenantID + ":" + user.Email
+		user.EmailUniqueKey = &v
+	}
+	user.PhoneUniqueKey = nil
+	if user.Phone != "" {
+		v := user.TenantID + ":" + user.Phone
+		user.PhoneUniqueKey = &v
+	}
 }
 
 // Delete 软删除用户（设置 deleted_at）
@@ -157,7 +201,7 @@ func (r *RoleRepository) Create(role *models.Role) error {
 	role.CreatedAt = time.Now()
 	role.UpdatedAt = time.Now()
 
-	query := `INSERT INTO roles (id, tenant_id, name, description, tools, allowed_mcp_tools, allowed_skills, rate_limit, data_scope, is_system, is_default, created_at, updated_at) 
+	query := `INSERT INTO roles (id, tenant_id, name, description, tools, allowed_mcp_tools, allowed_skills, rate_limit, data_scope, is_system, is_default, created_at, updated_at)
 			  VALUES (:id, :tenant_id, :name, :description, :tools, :allowed_mcp_tools, :allowed_skills, :rate_limit, :data_scope, :is_system, :is_default, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, role)
 	return err

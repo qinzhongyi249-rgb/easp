@@ -40,7 +40,7 @@ export interface Skill {
   output_schema?: string; // JSON Schema
   steps: string; // JSON array of SkillStep
   permission_topology?: string;
-  status: string; // draft/active/archived
+  status: string; // draft/testing/published/disabled，兼容旧 active/archived
   usage_count: number;
   last_used_at?: string;
   created_by?: string;
@@ -61,6 +61,7 @@ export interface SkillExecution {
   skill_id: string;
   tenant_id: string;
   status: string; // running/completed/success/failed
+  execution_mode?: string; // dry_run/sandbox/production
   inputs?: string | Record<string, unknown>; // JSON or native object
   outputs?: string | Record<string, unknown>; // JSON or native object
   step_results?: string | StepResult[]; // JSON array or native array
@@ -91,6 +92,8 @@ export const STEP_TYPES = [
 export const skillApi = {
   list: (tenantId: string) =>
     client.get<Skill[]>(`/tenants/${tenantId}/skills`),
+  listUsable: (tenantId: string) =>
+    client.get<Skill[]>(`/tenants/${tenantId}/skills`, { params: { status: 'usable' } }),
   get: (tenantId: string, id: string) =>
     client.get<Skill>(`/tenants/${tenantId}/skills/${id}`),
   create: (tenantId: string, data: Partial<Skill>) =>
@@ -99,8 +102,8 @@ export const skillApi = {
     client.put<Skill>(`/tenants/${tenantId}/skills/${id}`, data),
   delete: (tenantId: string, id: string) =>
     client.delete(`/tenants/${tenantId}/skills/${id}`),
-  execute: (tenantId: string, skillId: string, inputs: Record<string, unknown>) =>
-    client.post<SkillExecution>(`/tenants/${tenantId}/skills/${skillId}/execute`, { inputs }),
+  execute: (tenantId: string, skillId: string, inputs: Record<string, unknown>, executionMode = 'sandbox') =>
+    client.post<SkillExecution>(`/tenants/${tenantId}/skills/${skillId}/execute`, { inputs, execution_mode: executionMode }),
   listExecutions: (tenantId: string, skillId?: string, limit = 20) =>
     client.get<{ executions: SkillExecution[] }>(`/tenants/${tenantId}/skill-executions`, { params: { skill_id: skillId, limit } }),
   getExecution: (executionId: string) =>

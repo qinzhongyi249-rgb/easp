@@ -16,8 +16,8 @@ import (
 // MemoryExtractor 记忆提取器
 // 从对话历史中提取有价值的信息，保存为用户记忆和实体
 type MemoryExtractor struct {
-	memorySvc  *MemoryService
-	modelCfg   ModelConfig
+	memorySvc *MemoryService
+	modelCfg  ModelConfig
 }
 
 // ModelConfig 模型配置（用于调用LLM提取记忆）
@@ -29,9 +29,9 @@ type ModelConfig struct {
 
 // ExtractRequest 提取请求
 type ExtractRequest struct {
-	TenantID string              `json:"tenant_id"`
-	UserID   string              `json:"user_id"`
-	Messages []ExtractMessage    `json:"messages"`
+	TenantID string           `json:"tenant_id"`
+	UserID   string           `json:"user_id"`
+	Messages []ExtractMessage `json:"messages"`
 }
 
 // ExtractMessage 对话消息
@@ -48,7 +48,7 @@ type ExtractResult struct {
 
 // ExtractedMemory 提取的记忆
 type ExtractedMemory struct {
-	Type    string `json:"type"`    // preference/fact
+	Type    string `json:"type"` // preference/fact
 	Content string `json:"content"`
 }
 
@@ -70,6 +70,13 @@ func NewMemoryExtractor(memorySvc *MemoryService, modelCfg ModelConfig) *MemoryE
 func (e *MemoryExtractor) ExtractAndSave(req ExtractRequest) {
 	if len(req.Messages) < 2 {
 		return // 对话太短，不需要提取
+	}
+	if e.memorySvc != nil {
+		settings := e.memorySvc.GetMemorySettings(req.TenantID, req.UserID)
+		if !settings.AutoExtractEnabled {
+			log.Printf("MemoryExtractor: auto extract disabled for tenant=%s user=%s", req.TenantID, req.UserID)
+			return
+		}
 	}
 
 	result, err := e.extract(req.Messages)
@@ -105,7 +112,7 @@ func (e *MemoryExtractor) ExtractAndSave(req ExtractRequest) {
 	}
 
 	if len(result.Memories) > 0 || len(result.Entities) > 0 {
-		log.Printf("MemoryExtractor: extracted %d memories, %d entities for user %s", 
+		log.Printf("MemoryExtractor: extracted %d memories, %d entities for user %s",
 			len(result.Memories), len(result.Entities), req.UserID)
 	}
 }
@@ -192,7 +199,7 @@ func (e *MemoryExtractor) extract(messages []ExtractMessage) (*ExtractResult, er
 	// 解析LLM输出的JSON
 	content := respData.Choices[0].Message.Content
 	content = strings.TrimSpace(content)
-	
+
 	// 去掉可能的markdown代码块标记
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")

@@ -2,6 +2,13 @@
 
 > 最后更新: 2026-06-02
 
+## 文档索引
+- [FEATURES.md](FEATURES.md): 功能清单
+- [TODO.md](TODO.md): 迭代计划
+- [DATABASE.md](DATABASE.md): 数据库设计
+- [CONFIG.md](CONFIG.md): 项目配置
+- [PRIVATE_DEPLOYMENT.md](PRIVATE_DEPLOYMENT.md): 私有化部署手册（硬件、配置、部署、运维、验收）
+
 ## 一、项目路径
 
 ```
@@ -60,11 +67,11 @@ server {
 ## 四、数据库配置
 
 ```yaml
-host: rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei.rds.aliyuncs.com
+host: <mysql-host>
 port: 3306
-user: easp_dev
-password: Easp_dev123
-database: easp_dev
+user: <mysql-user>
+password: <mysql-password>
+database: easp
 charset: utf8mb4
 ```
 
@@ -73,9 +80,9 @@ charset: utf8mb4
 ## 五、模型服务配置
 
 ```yaml
-base_url: https://maas.apigo.ai/v1
-api_key: sk-platform-228fe8d21e2a407f3f35ecf5e1ea72ca3adb23f3023432d2
-model: claude-opus-4-7
+base_url: <openai-compatible-base-url>
+api_key: <model-api-key>
+model: <model-name>
 temperature: 1.0
 max_tokens: 4096
 ```
@@ -107,16 +114,16 @@ require (
 PORT=8082
 
 # 数据库
-DB_HOST=rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei.rds.aliyuncs.com
+DB_HOST=<mysql-host>
 DB_PORT=3306
-DB_USER=easp_dev
-DB_PASSWORD=Easp_dev123
-DB_NAME=easp_dev
+DB_USER=<mysql-user>
+DB_PASSWORD=<mysql-password>
+DB_NAME=easp
 
 # 模型服务
-MODEL_BASE_URL=https://maas.apigo.ai/v1
-MODEL_API_KEY=sk-platform-228fe8d21e2a407f3f35ecf5e1ea72ca3adb23f3023432d2
-MODEL_NAME=claude-opus-4-7
+MODEL_BASE_URL=<openai-compatible-base-url>
+MODEL_API_KEY=<model-api-key>
+MODEL_NAME=<model-name>
 ```
 
 ---

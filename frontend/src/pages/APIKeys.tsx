@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Select, Typography, Popconfirm, App, Tag, Switch, Tooltip, Alert } from 'antd';
-import { PlusOutlined, DeleteOutlined, CopyOutlined, KeyOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, CopyOutlined, KeyOutlined, CheckCircleOutlined, CloseCircleOutlined, FileTextOutlined } from '@ant-design/icons';
 import type { APIKey } from '../api/apiKey';
 import { apiKeyApi } from '../api/apiKey';
 import { useOutletContext } from 'react-router-dom';
@@ -143,9 +143,14 @@ const APIKeys: React.FC = () => {
         <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>
           <KeyOutlined style={{ marginRight: 8 }} />API Key 管理
         </Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreatedKey(null); setModalOpen(true); }}>
-          创建 API Key
-        </Button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Button icon={<FileTextOutlined />} href="/docs/api-key-access" target="_blank" rel="noopener noreferrer">
+            接入文档
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreatedKey(null); setModalOpen(true); }}>
+            创建 API Key
+          </Button>
+        </div>
       </div>
 
       <Alert
@@ -156,7 +161,7 @@ const APIKeys: React.FC = () => {
         description={
           <span>
             通过 API Key，外部系统（小程序、APP、H5 等）可以直接调用 AI 助手，无需用户登录。
-            <a href="https://docs.easp.com/embed" target="_blank" rel="noopener noreferrer" style={{ marginLeft: 8 }}>查看接入文档 →</a>
+            <a href="/docs/api-key-access" target="_blank" rel="noopener noreferrer" style={{ marginLeft: 8 }}>查看接入文档 →</a>
           </span>
         }
       />

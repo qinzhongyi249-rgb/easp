@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -14,6 +15,7 @@ import (
 // MemoryService 记忆服务
 type MemoryService struct {
 	embeddingSvc EmbeddingService
+	vectorSvc    *VectorMemoryService
 }
 
 // EmbeddingService Embedding服务接口
@@ -25,18 +27,78 @@ type EmbeddingService interface {
 // MemoryConfig 记忆配置
 type MemoryConfig struct {
 	EmbeddingService EmbeddingService
+	VectorService    *VectorMemoryService
 }
 
 // NewMemoryService 创建记忆服务
 func NewMemoryService(config MemoryConfig) *MemoryService {
+	vectorSvc := config.VectorService
+	if vectorSvc == nil {
+		// 默认接入已有向量桥接服务。失败不阻塞主链路，写入时按审计记录失败原因。
+		vectorSvc = NewVectorMemoryService(VectorMemoryConfig{
+			BridgeURL:  "http://localhost:8083",
+			Database:   "easp_memory",
+			Collection: "memories",
+			Dimension:  1024,
+		})
+	}
 	return &MemoryService{
 		embeddingSvc: config.EmbeddingService,
+		vectorSvc:    vectorSvc,
 	}
 }
 
-// SaveUserMemory 保存用户记忆
+// SaveUserMemory 保存用户记忆。
+// 治理边界：敏感过滤/去重/审计只作用于持久化链路，不修改当前轮模型推理或工具调用参数。
 func (s *MemoryService) SaveUserMemory(tenantID, userID, memType, content string, metadata map[string]interface{}) (*models.UserMemory, error) {
-	// 生成向量
+	content = strings.TrimSpace(content)
+	memType = strings.TrimSpace(memType)
+	if tenantID == "" || userID == "" || memType == "" || content == "" {
+		return nil, fmt.Errorf("tenant_id, user_id, type and content are required")
+	}
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	source := memorySource(metadata)
+	settings := s.GetMemorySettings(tenantID, userID)
+
+	originalContent := content
+	findings := []SensitiveFinding{}
+	blocked := false
+	if settings.SensitiveFilterEnabled {
+		content, findings, blocked = SanitizeForPersistence(content)
+		if blocked {
+			s.SaveMemoryAudit(MemoryAuditLog{
+				TenantID:         tenantID,
+				UserID:           userID,
+				Action:           "blocked_sensitive",
+				Source:           source,
+				OriginalPreview:  originalContent,
+				SanitizedPreview: content,
+				Reason:           "sensitive content blocked before persistence",
+				Metadata:         map[string]interface{}{"findings": findings, "type": memType},
+			})
+			return nil, fmt.Errorf("memory contains blocked sensitive content")
+		}
+		if len(findings) > 0 {
+			metadata["sensitive_findings"] = findings
+		}
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("memory content is empty after sanitization")
+	}
+
+	if merged, decision, err := s.tryMergeUserMemory(tenantID, userID, memType, content, source); err != nil {
+		log.Printf("memory merge check failed: %v", err)
+	} else if decision.Conflict {
+		metadata["merge_decision"] = decision.Reason
+		metadata["similarity"] = decision.Similarity
+	} else if merged != nil {
+		return merged, nil
+	}
+
+	contentHashValue := MemoryContentHash(content)
 	embedding, err := s.embeddingSvc.GetEmbedding(content)
 	if err != nil {
 		log.Printf("Failed to get embedding: %v", err)
@@ -46,27 +108,80 @@ func (s *MemoryService) SaveUserMemory(tenantID, userID, memType, content string
 
 	embeddingBytes, _ := json.Marshal(embedding)
 	metadataBytes, _ := json.Marshal(metadata)
-
+	now := time.Now()
 	memory := &models.UserMemory{
-		ID:        uuid.New().String(),
-		TenantID:  tenantID,
-		UserID:    userID,
-		Type:      memType,
-		Content:   content,
-		Embedding: embeddingBytes,
-		Metadata:  metadataBytes,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:          uuid.New().String(),
+		TenantID:    tenantID,
+		UserID:      userID,
+		Type:        memType,
+		Content:     content,
+		ContentHash: &contentHashValue,
+		Source:      source,
+		Status:      "active",
+		Embedding:   embeddingBytes,
+		Metadata:    metadataBytes,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
-	_, err = database.DB.NamedExec(`
-		INSERT INTO user_memories (id, tenant_id, user_id, type, content, embedding, metadata, created_at, updated_at)
-		VALUES (:id, :tenant_id, :user_id, :type, :content, :embedding, :metadata, :created_at, :updated_at)
+	result, err := database.DB.NamedExec(`
+		INSERT INTO user_memories
+		(id, tenant_id, user_id, type, content, content_hash, source, status, embedding, metadata, created_at, updated_at)
+		VALUES (:id, :tenant_id, :user_id, :type, :content, :content_hash, :source, :status, :embedding, :metadata, :created_at, :updated_at)
+		ON DUPLICATE KEY UPDATE
+			access_count = access_count + 1,
+			last_seen_at = NOW(),
+			updated_at = NOW()
 	`, memory)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to save user memory: %w", err)
 	}
+
+	action := "created"
+	if affected, _ := result.RowsAffected(); affected > 1 {
+		action = "deduplicated"
+	}
+	var saved models.UserMemory
+	selectErr := database.DB.Get(&saved, userMemorySelectBase()+`
+		WHERE tenant_id = ? AND user_id = ? AND type = ? AND content_hash = ? LIMIT 1`, tenantID, userID, memType, contentHashValue)
+	if selectErr == nil {
+		memory = &saved
+	}
+	if len(findings) > 0 && action == "created" {
+		s.SaveMemoryAudit(MemoryAuditLog{
+			TenantID:         tenantID,
+			UserID:           userID,
+			MemoryID:         &memory.ID,
+			Action:           "redacted",
+			Source:           source,
+			OriginalPreview:  originalContent,
+			SanitizedPreview: content,
+			Reason:           "sensitive content redacted before persistence",
+			Metadata:         map[string]interface{}{"findings": findings, "type": memType},
+		})
+	}
+	s.SaveMemoryAudit(MemoryAuditLog{
+		TenantID:         tenantID,
+		UserID:           userID,
+		MemoryID:         &memory.ID,
+		Action:           action,
+		Source:           source,
+		OriginalPreview:  originalContent,
+		SanitizedPreview: content,
+		Reason:           "user memory persistence",
+		Metadata: map[string]interface{}{
+			"type":                 memType,
+			"content_hash":         contentHashValue,
+			"sensitive_findings":   findings,
+			"hybrid_search_mode":   settings.HybridSearchMode,
+			"hybrid_search_enable": settings.HybridSearchEnabled,
+		},
+	})
+
+	if settings.HybridSearchEnabled && action == "created" {
+		s.indexUserMemoryVector(*memory, source)
+	}
+	s.enforceUserMemoryCapacity(tenantID, userID, memType, source)
 
 	return memory, nil
 }
@@ -75,9 +190,7 @@ func (s *MemoryService) SaveUserMemory(tenantID, userID, memType, content string
 func (s *MemoryService) ListAllUserMemories(tenantID string, limit int) ([]models.UserMemory, error) {
 	var memories []models.UserMemory
 	err := database.DB.Select(&memories,
-		`SELECT id, tenant_id, user_id, type, content, COALESCE(entity_ids, '[]') as entity_ids,
-		 COALESCE(metadata, '{}') as metadata, access_count, last_accessed_at, created_at, updated_at
-		 FROM user_memories WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
+		userMemorySelectBase()+`WHERE tenant_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user memories: %w", err)
 	}
@@ -87,7 +200,7 @@ func (s *MemoryService) ListAllUserMemories(tenantID string, limit int) ([]model
 // GetUserMemories 获取用户记忆
 func (s *MemoryService) GetUserMemories(tenantID, userID string, memType string, limit int) ([]models.UserMemory, error) {
 	var memories []models.UserMemory
-	query := "SELECT id, tenant_id, user_id, type, content, COALESCE(entity_ids, '[]') as entity_ids, COALESCE(metadata, '{}') as metadata, access_count, last_accessed_at, created_at, updated_at FROM user_memories WHERE tenant_id = ? AND user_id = ?"
+	query := userMemorySelectBase() + "WHERE tenant_id = ? AND user_id = ? AND status = 'active'"
 	args := []interface{}{tenantID, userID}
 
 	if memType != "" {
@@ -95,37 +208,79 @@ func (s *MemoryService) GetUserMemories(tenantID, userID string, memType string,
 		args = append(args, memType)
 	}
 
-	query += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
+	query += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+	args = append(args, limit*5)
 
 	err := database.DB.Select(&memories, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user memories: %w", err)
 	}
 
-	return memories, nil
+	return RankUserMemories(memories, nil, limit, time.Now()), nil
 }
 
 // SearchUserMemories 搜索用户记忆
 func (s *MemoryService) SearchUserMemories(tenantID, userID, query string, limit int) ([]models.UserMemory, error) {
-	// 1. 语义搜索 (暂时跳过，后续接入向量DB)
-	_, err := s.embeddingSvc.GetEmbedding(query)
-	if err != nil {
-		// embedding失败不影响关键词搜索
-		log.Printf("Failed to get embedding: %v", err)
+	memories, _, err := s.SearchUserMemoriesWithExplanations(tenantID, userID, query, limit)
+	return memories, err
+}
+
+// SearchUserMemoriesWithExplanations 搜索用户记忆并返回层面3召回解释。
+func (s *MemoryService) SearchUserMemoriesWithExplanations(tenantID, userID, query string, limit int) ([]models.UserMemory, []MemoryScoreBreakdown, error) {
+	settings := s.GetMemorySettings(tenantID, userID)
+	// 1. 语义搜索准备：embedding 失败不影响关键词/向量桥接检索。
+	if s.embeddingSvc != nil {
+		_, err := s.embeddingSvc.GetEmbedding(query)
+		if err != nil {
+			log.Printf("Failed to get embedding: %v", err)
+		}
 	}
 
 	// 2. 关键词搜索
 	keywords := extractKeywords(query)
 	log.Printf("SearchUserMemories: tenant=%s, user=%s, query=%s, keywords=%v", tenantID, userID, query, keywords)
 
+	candidateLimit := limit * 5
+	if candidateLimit < 20 {
+		candidateLimit = 20
+	}
+
+	vectorScores := map[string]float64{}
+	var vectorMemories []models.UserMemory
+	if settings.HybridSearchEnabled && strings.Contains(settings.HybridSearchMode, "vector") && s.vectorSvc != nil && strings.TrimSpace(query) != "" {
+		vectorResults, err := s.vectorSvc.SearchMemoriesWithScores(tenantID, "user_memories", query, candidateLimit)
+		if err != nil {
+			log.Printf("SearchUserMemories: vector search failed, fallback to keyword search: %v", err)
+			s.SaveMemoryAudit(MemoryAuditLog{
+				TenantID: tenantID,
+				UserID:   userID,
+				Action:   "vector_search_fallback",
+				Source:   "recall",
+				Reason:   err.Error(),
+				Metadata: map[string]interface{}{"query": truncateRunes(query, 128), "mode": settings.HybridSearchMode},
+			})
+		} else if len(vectorResults) > 0 {
+			ids := make([]string, 0, len(vectorResults))
+			for _, result := range vectorResults {
+				ids = append(ids, result.Memory.ID)
+				vectorScores[result.Memory.ID] = normalizeVectorScore(result.Score)
+			}
+			loaded, err := getUserMemoriesByIDs(ids)
+			if err != nil {
+				log.Printf("SearchUserMemories: load vector memory candidates failed: %v", err)
+			} else {
+				for _, mem := range loaded {
+					if mem.TenantID == tenantID && mem.UserID == userID {
+						vectorMemories = append(vectorMemories, mem)
+					}
+				}
+			}
+		}
+	}
+
 	var memories []models.UserMemory
-	sqlQuery := `SELECT id, tenant_id, user_id, type, content, 
-		COALESCE(entity_ids, '[]') as entity_ids, 
-		COALESCE(metadata, '{}') as metadata, 
-		access_count, last_accessed_at, created_at, updated_at 
-		FROM user_memories 
-		WHERE tenant_id = ? AND user_id = ?`
+	sqlQuery := userMemorySelectBase() + `
+		WHERE tenant_id = ? AND user_id = ? AND status = 'active'`
 	args := []interface{}{tenantID, userID}
 
 	// 关键词匹配
@@ -141,23 +296,26 @@ func (s *MemoryService) SearchUserMemories(tenantID, userID, query string, limit
 		sqlQuery += ")"
 	}
 
-	sqlQuery += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
+	sqlQuery += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+	args = append(args, candidateLimit)
 
 	log.Printf("SearchUserMemories: SQL=%s, args=%v", sqlQuery, args)
-	err = database.DB.Select(&memories, sqlQuery, args...)
+	err := database.DB.Select(&memories, sqlQuery, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search user memories: %w", err)
+		return nil, nil, fmt.Errorf("failed to search user memories: %w", err)
 	}
 
-	log.Printf("SearchUserMemories: found %d memories", len(memories))
+	memories = appendMissingUserMemories(memories, vectorMemories)
+	memories = RankUserMemoriesHybrid(memories, keywords, vectorScores, limit, time.Now())
+	explanations := ExplainUserMemoryRanking(memories, keywords, vectorScores, limit, time.Now())
+	log.Printf("SearchUserMemories: found %d memories, explanations=%v", len(memories), explanations)
 
 	// 更新访问计数
 	for _, mem := range memories {
 		s.updateAccessCount(mem.ID)
 	}
 
-	return memories, nil
+	return memories, explanations, nil
 }
 
 // SaveSessionMemory 保存会话记忆
@@ -475,12 +633,8 @@ func (s *MemoryService) updateAccessCount(memoryID string) {
 // GetRoleMemories 获取角色共享记忆（同租户其他用户的fact类型记忆）
 func (s *MemoryService) GetRoleMemories(tenantID, excludeUserID, query string, limit int) ([]models.UserMemory, error) {
 	var memories []models.UserMemory
-	sqlQuery := `SELECT id, tenant_id, user_id, type, content, 
-		COALESCE(entity_ids, '[]') as entity_ids, 
-		COALESCE(metadata, '{}') as metadata, 
-		access_count, last_accessed_at, created_at, updated_at 
-		FROM user_memories 
-		WHERE tenant_id = ? AND user_id != ? AND type = 'fact'`
+	sqlQuery := userMemorySelectBase() + `
+		WHERE tenant_id = ? AND user_id != ? AND type = 'fact' AND status = 'active'`
 	args := []interface{}{tenantID, excludeUserID}
 
 	if query != "" {
@@ -498,15 +652,20 @@ func (s *MemoryService) GetRoleMemories(tenantID, excludeUserID, query string, l
 		}
 	}
 
-	sqlQuery += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
+	keywords := extractKeywords(query)
+	candidateLimit := limit * 5
+	if candidateLimit < 20 {
+		candidateLimit = 20
+	}
+	sqlQuery += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+	args = append(args, candidateLimit)
 
 	err := database.DB.Select(&memories, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get role memories: %w", err)
 	}
 
-	return memories, nil
+	return RankUserMemories(memories, keywords, limit, time.Now()), nil
 }
 
 // extractKeywords 提取关键词（支持中文）

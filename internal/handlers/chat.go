@@ -9,8 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +25,7 @@ import (
 	skillPkg "github.com/easp-platform/easp/internal/skill"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // sanitizeToolName 将工具名称转换为符合 Gemini API 规范的格式
@@ -93,6 +94,16 @@ func sanitizeToolName(name string) string {
 	return sanitized
 }
 
+func executionModeFromArgs(args map[string]any) string {
+	if args == nil {
+		return skillPkg.ExecutionModeSandbox
+	}
+	if mode, ok := args["execution_mode"].(string); ok {
+		return skillPkg.NormalizeExecutionMode(mode)
+	}
+	return skillPkg.ExecutionModeSandbox
+}
+
 // ChatHandler AI 助手处理器
 type ChatHandler struct {
 	modelService    *modelservice.ModelService
@@ -123,9 +134,15 @@ type AssistantMessage struct {
 	Content string `json:"content"`
 }
 
+// AssistantPageContext 前端传入的事实型页面上下文。
+// 前端只负责传递当前页面/对象事实，业务理解和决策由后端提示词与模型完成。
+type AssistantPageContext map[string]any
+
 // AssistantRequest 助手请求
 type AssistantRequest struct {
-	Messages []AssistantMessage `json:"messages" binding:"required"`
+	Messages       []AssistantMessage   `json:"messages" binding:"required"`
+	ConversationID string               `json:"conversation_id,omitempty"`
+	PageContext    AssistantPageContext `json:"page_context,omitempty"`
 }
 
 // ToolDefinition 工具定义
@@ -152,13 +169,14 @@ type ToolCall struct {
 
 // SSE事件类型
 const (
-	SSEEventStatus    = "status"     // 状态更新
-	SSEEventHeartbeat = "heartbeat"  // 长任务心跳
-	SSEEventTool      = "tool"       // 工具执行结果
-	SSEEventDelta     = "delta"      // 流式文本片段
-	SSEEventDone      = "done"       // 完成
-	SSEEventError     = "error"      // 错误
-	SSEEventModelInfo = "model_info" // 模型信息
+	SSEEventStatus       = "status"       // 状态更新
+	SSEEventHeartbeat    = "heartbeat"    // 长任务心跳
+	SSEEventTool         = "tool"         // 工具执行结果
+	SSEEventDelta        = "delta"        // 流式文本片段
+	SSEEventDone         = "done"         // 完成
+	SSEEventError        = "error"        // 错误
+	SSEEventModelInfo    = "model_info"   // 模型信息
+	SSEEventConversation = "conversation" // 会话信息
 )
 
 // sendSSE 发送SSE事件
@@ -166,6 +184,13 @@ func sendSSE(c *gin.Context, event string, data any) {
 	jsonData, _ := json.Marshal(data)
 	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, string(jsonData))
 	c.Writer.Flush()
+}
+
+func sendSSEActive(c *gin.Context, activity *assistantActivityTracker, event string, data any) {
+	if activity != nil {
+		activity.touch()
+	}
+	sendSSE(c, event, data)
 }
 
 type modelCallResult struct {
@@ -177,9 +202,114 @@ type toolExecResult struct {
 	result string
 }
 
+type assistantActivityTracker struct {
+	idleWindow time.Duration
+	lastActive time.Time
+}
+
+type assistantDeltaBuffer struct {
+	minRunes      int
+	maxRunes      int
+	flushInterval time.Duration
+	pending       strings.Builder
+	lastFlushAt   time.Time
+}
+
+func newAssistantDeltaBuffer(minRunes, maxRunes int, flushInterval time.Duration) *assistantDeltaBuffer {
+	if minRunes <= 0 {
+		minRunes = 8
+	}
+	if maxRunes < minRunes {
+		maxRunes = minRunes * 4
+	}
+	if flushInterval <= 0 {
+		flushInterval = 80 * time.Millisecond
+	}
+	return &assistantDeltaBuffer{minRunes: minRunes, maxRunes: maxRunes, flushInterval: flushInterval}
+}
+
+func (b *assistantDeltaBuffer) push(piece string, now time.Time, force bool) []string {
+	if piece != "" {
+		b.pending.WriteString(piece)
+		if b.lastFlushAt.IsZero() {
+			b.lastFlushAt = now
+		}
+	}
+	pending := b.pending.String()
+	if pending == "" {
+		return nil
+	}
+
+	pendingRunes := []rune(pending)
+	timedFlush := !b.lastFlushAt.IsZero() && now.Sub(b.lastFlushAt) >= b.flushInterval
+	shouldFlush := force || len(pendingRunes) >= b.minRunes || timedFlush
+	if !shouldFlush {
+		return nil
+	}
+
+	chunks := make([]string, 0)
+	allowSmallFlush := force || timedFlush
+	for len(pendingRunes) > 0 {
+		if !allowSmallFlush && len(pendingRunes) < b.minRunes {
+			break
+		}
+		take := len(pendingRunes)
+		if take > b.maxRunes {
+			take = b.maxRunes
+		}
+		chunks = append(chunks, string(pendingRunes[:take]))
+		pendingRunes = pendingRunes[take:]
+		if !allowSmallFlush && len(pendingRunes) < b.minRunes {
+			break
+		}
+	}
+
+	b.pending.Reset()
+	if len(pendingRunes) > 0 {
+		b.pending.WriteString(string(pendingRunes))
+	}
+	if len(chunks) > 0 {
+		b.lastFlushAt = now
+	}
+	return chunks
+}
+
+func sendAssistantBufferedDelta(c *gin.Context, activity *assistantActivityTracker, content string) {
+	buffer := newAssistantDeltaBuffer(8, 32, 80*time.Millisecond)
+	for _, chunk := range buffer.push(content, time.Now(), true) {
+		if chunk == "" {
+			continue
+		}
+		sendSSEActive(c, activity, SSEEventDelta, map[string]string{"content": chunk})
+	}
+}
+
+func newAssistantActivityTracker(idleWindow time.Duration) *assistantActivityTracker {
+	if idleWindow <= 0 {
+		idleWindow = 90 * time.Second
+	}
+	return &assistantActivityTracker{idleWindow: idleWindow, lastActive: time.Now()}
+}
+
+func (t *assistantActivityTracker) touch() {
+	t.touchAt(time.Now())
+}
+
+func (t *assistantActivityTracker) touchAt(now time.Time) {
+	t.lastActive = now
+}
+
+func (t *assistantActivityTracker) idleTimedOut() bool {
+	return t.idleTimedOutAt(time.Now())
+}
+
+func (t *assistantActivityTracker) idleTimedOutAt(now time.Time) bool {
+	return !t.lastActive.IsZero() && now.Sub(t.lastActive) > t.idleWindow
+}
+
 // waitModelWithHeartbeat 在模型等待期间持续向前端发送 heartbeat，避免代理/浏览器长时间无数据断开。
 // 注意：模型调用在 goroutine 中执行，SSE 写入只在当前 goroutine 中发生，避免并发写 ResponseWriter。
-func waitModelWithHeartbeat(c *gin.Context, requestStart time.Time, stage, message string, call func() (*ModelResponse, error)) (*ModelResponse, error) {
+func waitModelWithHeartbeat(c *gin.Context, requestStart time.Time, activity *assistantActivityTracker, stage, message string, call func() (*ModelResponse, error)) (*ModelResponse, error) {
 	resultCh := make(chan modelCallResult, 1)
 	go func() {
 		resp, err := call()
@@ -193,9 +323,15 @@ func waitModelWithHeartbeat(c *gin.Context, requestStart time.Time, stage, messa
 		case <-c.Request.Context().Done():
 			return nil, c.Request.Context().Err()
 		case res := <-resultCh:
+			if activity != nil {
+				activity.touch()
+			}
 			return res.response, res.err
 		case <-ticker.C:
-			sendSSE(c, SSEEventHeartbeat, map[string]any{
+			if activity != nil && activity.idleTimedOut() {
+				return nil, fmt.Errorf("模型调用长时间无进展，请稍后重试")
+			}
+			sendSSEActive(c, activity, SSEEventHeartbeat, map[string]any{
 				"message":    message,
 				"stage":      stage,
 				"elapsed_ms": time.Since(requestStart).Milliseconds(),
@@ -206,7 +342,7 @@ func waitModelWithHeartbeat(c *gin.Context, requestStart time.Time, stage, messa
 }
 
 // waitToolWithHeartbeat 在工具执行等待期间持续发送 heartbeat。
-func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, stage, message string, call func() string) (string, error) {
+func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, activity *assistantActivityTracker, stage, message string, call func() string) (string, error) {
 	resultCh := make(chan toolExecResult, 1)
 	go func() {
 		resultCh <- toolExecResult{result: call()}
@@ -219,9 +355,15 @@ func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, stage, messag
 		case <-c.Request.Context().Done():
 			return "", c.Request.Context().Err()
 		case res := <-resultCh:
+			if activity != nil {
+				activity.touch()
+			}
 			return res.result, nil
 		case <-ticker.C:
-			sendSSE(c, SSEEventHeartbeat, map[string]any{
+			if activity != nil && activity.idleTimedOut() {
+				return "", fmt.Errorf("工具调用长时间无进展，请稍后重试")
+			}
+			sendSSEActive(c, activity, SSEEventHeartbeat, map[string]any{
 				"message":    message,
 				"stage":      stage,
 				"elapsed_ms": time.Since(requestStart).Milliseconds(),
@@ -232,25 +374,174 @@ func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, stage, messag
 }
 
 // getSystemPrompt 获取系统提示
-func getSystemPrompt(tenantID string, toolNames []string) string {
+func getSystemPrompt(tenantID string, toolNames []string, unavailableCapabilities ...[]string) string {
 	toolList := "无"
 	if len(toolNames) > 0 {
-		toolList = strings.Join(toolNames, "、")
+		visible := toolNames
+		if len(visible) > 30 {
+			visible = visible[:30]
+		}
+		toolList = strings.Join(visible, "、")
+		if len(toolNames) > len(visible) {
+			toolList += fmt.Sprintf(" 等%d个", len(toolNames))
+		}
 	}
-	return `你是 EASP (Enterprise API Service Platform) 的智能助手。你可以帮助管理员管理平台资源。
+	unavailableSection := ""
+	if len(unavailableCapabilities) > 0 && len(unavailableCapabilities[0]) > 0 {
+		visible := unavailableCapabilities[0]
+		if len(visible) > 20 {
+			visible = visible[:20]
+		}
+		unavailableSection = "\n\n## 不可用能力\n以下能力当前用户没有权限，不能调用，也不要追问这些能力的业务必填项；如果用户请求不可用能力，直接提示缺少权限：\n- " + strings.Join(visible, "\n- ")
+		if len(unavailableCapabilities[0]) > len(visible) {
+			unavailableSection += fmt.Sprintf("\n- 其余 %d 项不可用能力已省略", len(unavailableCapabilities[0])-len(visible))
+		}
+	}
+	return `你是 EASP 企业智能服务平台助手。
+租户: ` + tenantID + `
+可用工具: ` + toolList + `
+规则:
+- 需要操作/查询时优先调用工具，不猜测。
+- 配置变更前说明关键影响；高危操作先确认。
+- 输出尽量精简：先结论，少铺垫；查询结果只列关键字段。
+- 工具返回的数据优先于记忆和页面上下文。
+- 创建用户/角色/MCP 等多步骤任务，优先使用可用 Skill；Skill 返回 requires_input 时只追问缺失字段，不继续调用工具。
+- 创建用户只需要 email 和 display_name，role_name 可选；不要询问、收集或输出初始密码，后续通过重置密码或 SSO 完成登录。
+- 无权限或无工具时直接说明。` + unavailableSection
+}
 
-当前租户ID: ` + tenantID + `
-你当前可用的工具: ` + toolList + `
+func buildPageContextPrompt(pageContext AssistantPageContext) string {
+	if len(pageContext) == 0 {
+		return ""
+	}
+	ctxBytes, err := json.MarshalIndent(pageContext, "", "  ")
+	if err != nil || len(ctxBytes) == 0 {
+		return ""
+	}
+	if len(ctxBytes) > 4096 {
+		ctxBytes = ctxBytes[:4096]
+	}
+	return "\n\n## 当前页面上下文（前端传入的事实，不是业务结论）\n" + string(ctxBytes) + "\n请结合这些页面事实理解用户指代，例如‘当前页面’、‘这个对象’、‘刚才看到的配置’。如需执行操作，仍必须依据后端工具返回的数据做最终判断。"
+}
 
-当用户请求你执行操作时，请调用相应的工具。调用工具后，请用中文总结执行结果。
+func lastUserMessage(messages []AssistantMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return strings.TrimSpace(messages[i].Content)
+		}
+	}
+	return ""
+}
 
-对于查询结果，请用清晰的表格或列表格式展示。
-对于配置变更，请确认变更内容后再执行。
-如果用户请求的操作超出了你的可用工具范围，请礼貌告知权限不足。`
+func titleFromMessage(content string) string {
+	content = strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))
+	if content == "" {
+		return "新对话"
+	}
+	runes := []rune(content)
+	if len(runes) > 40 {
+		return string(runes[:40]) + "..."
+	}
+	return content
+}
+
+func ensureAssistantConversation(tenantID, userID string, req *AssistantRequest) string {
+	conversationID := strings.TrimSpace(req.ConversationID)
+	pageContextJSON := "null"
+	if len(req.PageContext) > 0 {
+		if b, err := json.Marshal(req.PageContext); err == nil && len(b) > 0 {
+			if len(b) > 8192 {
+				b = b[:8192]
+			}
+			pageContextJSON = string(b)
+		}
+	}
+
+	if conversationID != "" {
+		var count int
+		if err := database.DB.Get(&count,
+			"SELECT COUNT(*) FROM assistant_conversations WHERE id = ? AND tenant_id = ? AND user_id = ?",
+			conversationID, tenantID, userID); err == nil && count > 0 {
+			database.DB.Exec("UPDATE assistant_conversations SET page_context = ?, updated_at = NOW() WHERE id = ?", pageContextJSON, conversationID)
+			return conversationID
+		}
+	}
+
+	conversationID = uuid.New().String()
+	title := titleFromMessage(lastUserMessage(req.Messages))
+	if _, err := database.DB.Exec(`
+		INSERT INTO assistant_conversations (id, tenant_id, user_id, title, page_context, message_count, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())`, conversationID, tenantID, userID, title, pageContextJSON); err != nil {
+		logger.Warn("chat", "create assistant conversation failed",
+			logger.Field("tenant_id", tenantID),
+			logger.Field("user_id", userID),
+			logger.Field("error", err.Error()),
+		)
+	}
+	return conversationID
+}
+
+func loadConversationMessages(tenantID, userID, conversationID string, limit int) []AssistantMessage {
+	if conversationID == "" || limit <= 0 {
+		return nil
+	}
+	var rows []models.SessionMemory
+	err := database.DB.Select(&rows, `
+		SELECT id, tenant_id, user_id, session_id, role, content, token_count, entity_ids, created_at
+		FROM session_memories
+		WHERE tenant_id = ? AND user_id = ? AND session_id = ? AND role IN ('user','assistant')
+		ORDER BY created_at DESC
+		LIMIT ?`, tenantID, userID, conversationID, limit)
+	if err != nil {
+		logger.Warn("chat", "load conversation history failed",
+			logger.Field("tenant_id", tenantID),
+			logger.Field("user_id", userID),
+			logger.Field("conversation_id", conversationID),
+			logger.Field("error", err.Error()),
+		)
+		return nil
+	}
+
+	messages := make([]AssistantMessage, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		messages = append(messages, AssistantMessage{Role: rows[i].Role, Content: rows[i].Content})
+	}
+	return messages
+}
+
+func saveConversationMessage(tenantID, userID, conversationID, role, content string) {
+	content = strings.TrimSpace(content)
+	if tenantID == "" || userID == "" || conversationID == "" || content == "" {
+		return
+	}
+	if len([]rune(content)) > 8000 {
+		content = string([]rune(content)[:8000])
+	}
+	_, err := database.DB.Exec(`
+		INSERT INTO session_memories (id, tenant_id, user_id, session_id, role, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, NOW())`, uuid.New().String(), tenantID, userID, conversationID, role, content)
+	if err != nil {
+		logger.Warn("chat", "save conversation message failed",
+			logger.Field("tenant_id", tenantID),
+			logger.Field("user_id", userID),
+			logger.Field("conversation_id", conversationID),
+			logger.Field("role", role),
+			logger.Field("error", err.Error()),
+		)
+		return
+	}
+	database.DB.Exec("UPDATE assistant_conversations SET message_count = message_count + 1, updated_at = NOW() WHERE id = ?", conversationID)
+}
+
+type auditContext struct {
+	AgentID   string
+	IP        string
+	UserAgent string
+	StartedAt time.Time
 }
 
 // logAudit 记录审计日志（AI助手写操作）
-func logAudit(tenantID, userID, toolName, action, resource, detail string) {
+func logAudit(ctx *auditContext, tenantID, userID, toolName, action, resource, detail string) {
 	auditRepo := repositories.NewAuditLogRepository()
 	auditLog := &models.AuditLog{
 		TenantID: tenantID,
@@ -259,6 +550,21 @@ func logAudit(tenantID, userID, toolName, action, resource, detail string) {
 	}
 	if userID != "" {
 		auditLog.UserID = &userID
+	}
+	if ctx != nil {
+		if ctx.AgentID != "" {
+			auditLog.AgentID = &ctx.AgentID
+		}
+		if ctx.IP != "" {
+			auditLog.IP = &ctx.IP
+		}
+		if ctx.UserAgent != "" {
+			auditLog.UserAgent = &ctx.UserAgent
+		}
+		if !ctx.StartedAt.IsZero() {
+			durationMs := int(time.Since(ctx.StartedAt).Milliseconds())
+			auditLog.DurationMs = &durationMs
+		}
 	}
 	if resource != "" {
 		auditLog.Resource = &resource
@@ -283,6 +589,7 @@ var toolPermissionMap = map[string]string{
 	// 查询工具
 	"list_users":         "users",
 	"get_user":           "users",
+	"create_user":        "users",
 	"list_connectors":    "connectors",
 	"get_connector":      "connectors",
 	"list_mcp_tools":     "mcp-tools",
@@ -295,6 +602,7 @@ var toolPermissionMap = map[string]string{
 	"assign_role": "roles",
 	"revoke_role": "roles",
 	"list_roles":  "roles",
+	"create_role": "roles",
 	// 租户工具
 	"get_tenant_info": "*",
 	"update_tenant":   "*",
@@ -407,12 +715,19 @@ func getToolsForPermissions(permissions []string) []ToolDefinition {
 	return filtered
 }
 
-// loadSkillToolDefinitions 从数据库加载租户的 active Skills，转换为 AI 可直接调用的 ToolDefinition
-func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, hasWildcard bool) []ToolDefinition {
+type skillToolLoadResult struct {
+	Tools                   []ToolDefinition
+	UnavailableByToolName   map[string][]string
+	UnavailableCapabilities []string
+}
+
+// loadSkillToolDefinitions 从数据库加载租户的 published Skills，转换为 AI 可直接调用的 ToolDefinition
+func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, hasWildcard bool, permissions []string) skillToolLoadResult {
+	loadResult := skillToolLoadResult{UnavailableByToolName: map[string][]string{}}
 	var skills []models.Skill
 	var err error
 	if hasWildcard {
-		err = database.DB.Select(&skills, "SELECT * FROM skills WHERE tenant_id = ? AND status = 'active'", tenantID)
+		err = database.DB.Select(&skills, "SELECT * FROM skills WHERE tenant_id = ? AND status IN ('published', 'active')", tenantID)
 	} else if len(allowedSkillIDs) > 0 {
 		placeholders := ""
 		args := []any{}
@@ -424,11 +739,11 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 			args = append(args, id)
 		}
 		args = append(args, tenantID)
-		err = database.DB.Select(&skills, "SELECT * FROM skills WHERE id IN ("+placeholders+") AND tenant_id = ? AND status = 'active'", args...)
+		err = database.DB.Select(&skills, "SELECT * FROM skills WHERE id IN ("+placeholders+") AND tenant_id = ? AND status IN ('published', 'active')", args...)
 	}
 	if err != nil {
 		log.Printf("loadSkillToolDefinitions: failed to load: %v", err)
-		return nil
+		return loadResult
 	}
 
 	result := make([]ToolDefinition, 0, len(skills))
@@ -452,6 +767,7 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 				log.Printf("loadSkillToolDefinitions: failed to parse input_schema for skill %s: %v", sk.ID, err)
 			}
 		}
+		params = skillToolParametersForModel(params)
 
 		desc := ""
 		if sk.Description != nil {
@@ -461,25 +777,278 @@ func loadSkillToolDefinitions(tenantID string, allowedSkillIDs map[string]bool, 
 			desc = "技能：" + sk.Name
 		}
 		desc = "[技能] " + desc
-
-		result = append(result, ToolDefinition{
+		toolDef := ToolDefinition{
 			Type: "function",
 			Function: FunctionDef{
 				Name:        toolName,
 				Description: desc,
 				Parameters:  params,
 			},
-		})
+		}
+
+		if !hasWildcard {
+			missingPermissions, err := missingPermissionsForSkillSteps(sk.Steps, permissions)
+			if err != nil {
+				log.Printf("loadSkillToolDefinitions: failed to inspect permissions for skill %s: %v", sk.ID, err)
+				continue
+			}
+			if len(missingPermissions) > 0 {
+				log.Printf("loadSkillToolDefinitions: hiding skill %s due missing permissions: %v", sk.ID, missingPermissions)
+				loadResult.UnavailableByToolName[toolName] = missingPermissions
+				loadResult.UnavailableCapabilities = append(loadResult.UnavailableCapabilities, unavailableCapabilityLines([]ToolDefinition{toolDef}, map[string][]string{toolName: missingPermissions})...)
+				continue
+			}
+		}
+
+		result = append(result, toolDef)
 	}
-	return result
+	loadResult.Tools = result
+	return loadResult
 }
 
 // loadMCPToolDefinitions 从数据库加载租户的MCP工具，转换为AI可调用的ToolDefinition
+func skillToolParametersForModel(params map[string]any) map[string]any {
+	if params == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	cloned := make(map[string]any, len(params))
+	for k, v := range params {
+		if k == "required" {
+			continue
+		}
+		cloned[k] = v
+	}
+	if _, ok := cloned["type"]; !ok {
+		cloned["type"] = "object"
+	}
+	if _, ok := cloned["properties"]; !ok {
+		cloned["properties"] = map[string]any{}
+	}
+	return cloned
+}
+
+func missingPermissionsForSkillSteps(stepsJSON string, permissions []string) ([]string, error) {
+	var steps []map[string]any
+	if err := json.Unmarshal([]byte(stepsJSON), &steps); err != nil {
+		return nil, err
+	}
+	permSet := make(map[string]bool, len(permissions))
+	hasWildcard := false
+	for _, p := range permissions {
+		permSet[p] = true
+		if p == "*" {
+			hasWildcard = true
+		}
+	}
+	if hasWildcard {
+		return nil, nil
+	}
+
+	missingSet := map[string]bool{}
+	var walk func([]map[string]any)
+	walk = func(items []map[string]any) {
+		for _, step := range items {
+			stepType, _ := step["type"].(string)
+			if stepType == "mcp_tool" {
+				name, _ := step["action"].(string)
+				if required, ok := toolPermissionMap[name]; ok && required != "*" && !permSet[required] {
+					missingSet[required] = true
+				}
+			}
+			params, _ := step["params"].(map[string]any)
+			if childRaw, ok := params["steps"]; ok {
+				if childSteps, err := parseSkillStepMaps(childRaw); err == nil {
+					walk(childSteps)
+				}
+			}
+		}
+	}
+	walk(steps)
+
+	missing := make([]string, 0, len(missingSet))
+	for permission := range missingSet {
+		missing = append(missing, permission)
+	}
+	sort.Strings(missing)
+	return missing, nil
+}
+
+func assistantIntentMissingPermissions(userText string, permissions []string) (string, []string) {
+	text := strings.TrimSpace(userText)
+	if text == "" {
+		return "", nil
+	}
+	permSet := make(map[string]bool, len(permissions))
+	for _, permission := range permissions {
+		permSet[permission] = true
+	}
+	if permSet["*"] {
+		return "", nil
+	}
+
+	missingFor := func(required ...string) []string {
+		missing := make([]string, 0, len(required))
+		for _, permission := range required {
+			if !permSet[permission] {
+				missing = append(missing, permission)
+			}
+		}
+		sort.Strings(missing)
+		return missing
+	}
+
+	if isCreateUserIntent(text) {
+		missing := missingFor("users", "roles")
+		if len(missing) > 0 {
+			return "创建用户", missing
+		}
+	}
+	if containsAnyText(text, "创建角色", "新增角色", "添加角色") {
+		missing := missingFor("roles")
+		if len(missing) > 0 {
+			return "创建角色", missing
+		}
+	}
+	if containsAnyText(text, "创建MCP", "新增MCP", "添加MCP", "导入MCP", "创建 mcp", "新增 mcp", "导入 mcp") {
+		missing := missingFor("mcp-tools")
+		if len(missing) > 0 {
+			return "创建 MCP 工具", missing
+		}
+	}
+	return "", nil
+}
+
+func isCreateUserIntent(text string) bool {
+	if containsAnyText(text, "创建用户", "新增用户", "添加用户", "创建账号", "新增账号", "添加账号", "测试账号") {
+		return true
+	}
+	return containsAnyText(text, "创建", "新增", "添加") && containsAnyText(text, "用户", "账号", "帐号")
+}
+
+func containsAnyText(text string, keywords ...string) bool {
+	lower := strings.ToLower(text)
+	for _, keyword := range keywords {
+		if strings.Contains(lower, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func skillMissingPermissionMessage(skillName string, permissions []string) string {
+	if len(permissions) == 0 {
+		return ""
+	}
+	labels := permissionLabels(permissions)
+	return fmt.Sprintf("你当前没有执行“%s”所需的权限：%s。请联系管理员为你的角色开通对应权限后再操作。", skillName, strings.Join(labels, "、"))
+}
+
+var permissionDisplayLabels = map[string]string{
+	"users":      "用户管理",
+	"roles":      "角色管理",
+	"mcp-tools":  "MCP 工具管理",
+	"skills":     "技能管理",
+	"connectors": "连接器管理",
+	"memory":     "记忆管理",
+}
+
+func permissionLabels(permissions []string) []string {
+	labels := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		if label, ok := permissionDisplayLabels[permission]; ok {
+			labels = append(labels, label)
+		} else {
+			labels = append(labels, permission)
+		}
+	}
+	return labels
+}
+
+func toolDisplayLabel(tool ToolDefinition) string {
+	desc := strings.TrimSpace(tool.Function.Description)
+	desc = strings.TrimPrefix(desc, "[技能]")
+	desc = strings.TrimSpace(desc)
+	if desc != "" {
+		return desc
+	}
+	return getToolDisplayName(tool.Function.Name)
+}
+
+func unavailableCapabilityLines(tools []ToolDefinition, missingByToolName map[string][]string) []string {
+	lines := make([]string, 0)
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		missing := missingByToolName[tool.Function.Name]
+		if len(missing) == 0 {
+			continue
+		}
+		line := fmt.Sprintf("%s：缺少 %s", toolDisplayLabel(tool), strings.Join(permissionLabels(missing), "、"))
+		if !seen[line] {
+			seen[line] = true
+			lines = append(lines, line)
+		}
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+func unavailableCapabilityLinesForMissingPermissions(permissions []string) []string {
+	permSet := make(map[string]bool, len(permissions))
+	for _, permission := range permissions {
+		permSet[permission] = true
+	}
+	if permSet["*"] {
+		return nil
+	}
+	missingByToolName := map[string][]string{}
+	for _, tool := range getTools() {
+		required, ok := toolPermissionMap[tool.Function.Name]
+		if !ok || required == "*" || permSet[required] {
+			continue
+		}
+		missingByToolName[tool.Function.Name] = []string{required}
+	}
+	return unavailableCapabilityLines(getTools(), missingByToolName)
+}
+
+func toolPermissionDeniedResult(toolName string, missingByToolName map[string][]string) (string, bool) {
+	missing := missingByToolName[toolName]
+	if len(missing) == 0 {
+		return "", false
+	}
+	message := skillMissingPermissionMessage(getToolDisplayName(toolName), missing)
+	data, _ := json.Marshal(map[string]any{"error": message, "permission_denied": true})
+	return string(data), true
+}
+
+func parseSkillStepMaps(raw any) ([]map[string]any, error) {
+	switch v := raw.(type) {
+	case []map[string]any:
+		return v, nil
+	case []any:
+		steps := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				steps = append(steps, m)
+			}
+		}
+		return steps, nil
+	case string:
+		var steps []map[string]any
+		if err := json.Unmarshal([]byte(v), &steps); err != nil {
+			return nil, err
+		}
+		return steps, nil
+	default:
+		return nil, fmt.Errorf("unsupported steps type %T", raw)
+	}
+}
+
 func loadMCPToolDefinitions(tenantID string, allowedIDs map[string]bool, hasWildcard bool) []ToolDefinition {
 	var tools []models.MCPTool
 	var err error
 	if hasWildcard {
-		err = database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true", tenantID)
+		err = database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true AND status IN ('published', 'active')", tenantID)
 	} else if len(allowedIDs) > 0 {
 		placeholders := ""
 		args := []any{}
@@ -491,7 +1060,7 @@ func loadMCPToolDefinitions(tenantID string, allowedIDs map[string]bool, hasWild
 			args = append(args, id)
 		}
 		args = append(args, tenantID)
-		err = database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE id IN ("+placeholders+") AND tenant_id = ? AND enabled = true", args...)
+		err = database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE id IN ("+placeholders+") AND tenant_id = ? AND enabled = true AND status IN ('published', 'active')", args...)
 	}
 	if err != nil {
 		log.Printf("loadMCPToolDefinitions: failed to load: %v", err)
@@ -832,7 +1401,7 @@ func getTools() []ToolDefinition {
 						"name":        map[string]any{"type": "string", "description": "新名称"},
 						"description": map[string]any{"type": "string", "description": "新描述"},
 						"steps":       map[string]any{"type": "string", "description": "新步骤定义"},
-						"status":      map[string]any{"type": "string", "description": "状态: draft, active, disabled"},
+						"status":      map[string]any{"type": "string", "description": "生命周期: draft, testing, published, disabled"},
 					},
 					"required": []string{"skill_id"},
 				},
@@ -846,8 +1415,9 @@ func getTools() []ToolDefinition {
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"skill_id": map[string]any{"type": "string", "description": "技能ID"},
-						"inputs":   map[string]any{"type": "object", "description": "技能输入参数，根据技能的input_schema定义传入"},
+						"skill_id":       map[string]any{"type": "string", "description": "技能ID"},
+						"inputs":         map[string]any{"type": "object", "description": "技能输入参数，根据技能的input_schema定义传入"},
+						"execution_mode": map[string]any{"type": "string", "enum": []string{"sandbox", "dry_run", "production"}, "description": "执行模式，默认sandbox；production只允许published技能"},
 					},
 					"required": []string{"skill_id"},
 				},
@@ -861,8 +1431,9 @@ func getTools() []ToolDefinition {
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"tool_id":   map[string]any{"type": "string", "description": "MCP工具ID"},
-						"arguments": map[string]any{"type": "object", "description": "工具调用参数"},
+						"tool_id":        map[string]any{"type": "string", "description": "MCP工具ID"},
+						"arguments":      map[string]any{"type": "object", "description": "工具调用参数"},
+						"execution_mode": map[string]any{"type": "string", "enum": []string{"sandbox", "dry_run", "production"}, "description": "执行模式，默认sandbox；production只允许published工具"},
 					},
 					"required": []string{"tool_id"},
 				},
@@ -899,15 +1470,17 @@ func getTools() []ToolDefinition {
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "create_memory_pool",
-				Description: "创建新的记忆池。记忆池用于组织和管理不同层级的记忆。",
+				Description: "创建新的记忆池。记忆池用于按类型和用途组织长期记忆。",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name":     map[string]any{"type": "string", "description": "记忆池名称"},
-						"level":    map[string]any{"type": "string", "description": "层级: tenant, user, role"},
-						"owner_id": map[string]any{"type": "string", "description": "所属者ID（level=user时为用户ID）"},
+						"name":        map[string]any{"type": "string", "description": "记忆池名称"},
+						"type":        map[string]any{"type": "string", "description": "记忆池类型: personal, team, system"},
+						"purpose":     map[string]any{"type": "string", "description": "用途: conversation, skill, knowledge"},
+						"description": map[string]any{"type": "string", "description": "描述"},
+						"owner_id":    map[string]any{"type": "string", "description": "个人池所属用户ID，可选"},
 					},
-					"required": []string{"name", "level"},
+					"required": []string{"name"},
 				},
 			},
 		},
@@ -1010,17 +1583,161 @@ func toolCallStatusFromResult(result string) (string, error) {
 	return "success", nil
 }
 
+func permissionDeniedReplyFromToolResult(result string) (string, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(result), &obj); err != nil {
+		return "", false
+	}
+	denied, _ := obj["permission_denied"].(bool)
+	if !denied {
+		return "", false
+	}
+	message, _ := obj["error"].(string)
+	if strings.TrimSpace(message) == "" {
+		message = "当前没有执行该操作所需的权限，请联系管理员开通后再操作。"
+	}
+	return message, true
+}
+
+func requiresInputReplyFromToolResult(result string, userText ...string) (string, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(result), &obj); err != nil {
+		return "", false
+	}
+	status, _ := obj["status"].(string)
+	if status != "requires_input" {
+		return "", false
+	}
+	outputs, _ := obj["outputs"].(map[string]any)
+	message, _ := outputs["message"].(string)
+	if strings.TrimSpace(message) == "" {
+		message = "需要补充必要信息后才能继续。"
+	}
+	missing := stringifyFieldList(outputs["missing_fields"])
+	if len(missing) > 0 {
+		return fmt.Sprintf("%s\n请补充：%s", message, strings.Join(localizeMissingFields(missing, firstNonEmpty(userText...)), "、")), true
+	}
+	return message, true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func localizeMissingFields(fields []string, userText string) []string {
+	localized := make([]string, 0, len(fields))
+	for _, field := range fields {
+		localized = append(localized, localizeFieldName(field, userText))
+	}
+	return localized
+}
+
+func localizeFieldName(field, userText string) string {
+	if isLikelyChinese(userText) {
+		if label, ok := chineseFieldLabels[field]; ok {
+			return label
+		}
+		return strings.ReplaceAll(field, "_", " ")
+	}
+	return field
+}
+
+func isLikelyChinese(text string) bool {
+	for _, r := range text {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			return true
+		}
+	}
+	return false
+}
+
+var chineseFieldLabels = map[string]string{
+	"email":             "邮箱",
+	"display_name":      "显示名称",
+	"role_name":         "角色名称",
+	"name":              "名称",
+	"curl":              "curl 命令",
+	"test_result_id":    "curl 测试结果ID",
+	"description":       "说明",
+	"tools":             "功能权限",
+	"allowed_mcp_tools": "允许使用的 MCP 工具",
+	"allowed_skills":    "允许使用的技能",
+	"data_scope":        "数据范围",
+	"risk_level":        "风险等级",
+	"timeout_seconds":   "测试超时秒数",
+	"connector_id":      "连接器ID",
+	"tool_id":           "工具ID",
+	"skill_id":          "技能ID",
+	"backend_method":    "后端请求方法",
+	"backend_path":      "后端接口路径",
+	"base_url":          "服务地址",
+	"type":              "类型",
+	"pool_id":           "记忆池ID",
+	"entry_id":          "记忆条目ID",
+	"content":           "内容",
+	"user_email":        "用户邮箱",
+	"new_password":      "新密码",
+	"old_password":      "旧密码",
+	"tenant_id":         "租户ID",
+	"refresh_token":     "刷新令牌",
+}
+
+func stringifyFieldList(v any) []string {
+	result := []string{}
+	switch fields := v.(type) {
+	case []string:
+		result = fields
+	case []any:
+		for _, item := range fields {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				result = append(result, strings.TrimSpace(s))
+			}
+		}
+	}
+	return result
+}
+
+func jsonStringArg(args map[string]any, key string, fallback string) string {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return fallback
+	}
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return fallback
+		}
+		return v
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fallback
+		}
+		return string(data)
+	}
+}
+
 // writeTools 需要审计日志的写操作工具集合
 var writeTools = map[string]bool{
 	"create_connector": true, "update_connector": true,
 	"create_mcp_tool": true, "update_mcp_tool": true,
+	"create_user": true, "create_role": true,
 	"create_skill": true, "update_skill": true,
 	"create_memory_pool": true, "create_memory_entry": true, "update_memory_entry": true,
 	"update_tenant": true, "assign_role": true, "revoke_role": true,
 }
 
 // executeTool 执行工具调用
-func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[string]any) string {
+func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[string]any, auditCtx ...*auditContext) string {
+	var ctx *auditContext
+	if len(auditCtx) > 0 {
+		ctx = auditCtx[0]
+	}
 	userRepo := repositories.NewUserRepository()
 	roleRepo := repositories.NewRoleRepository()
 	userRoleRepo := repositories.NewUserRoleRepository()
@@ -1075,6 +1792,34 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		})
 		return string(data)
 
+	case "create_user":
+		email, _ := args["email"].(string)
+		displayName, _ := args["display_name"].(string)
+		roleName, _ := args["role_name"].(string)
+		if email == "" || displayName == "" {
+			return `{"error": "email, display_name 为必填项"}`
+		}
+		if existing, err := userRepo.GetByEmail(email); err == nil && existing != nil {
+			if existing.TenantID == tenantID {
+				return `{"success": true, "id": "` + existing.ID + `", "message": "用户已存在，未重复创建"}`
+			}
+			return `{"error": "邮箱已被其他租户占用"}`
+		}
+		randomPassword := uuid.New().String()
+		passwordHash, _ := bcrypt.GenerateFromPassword([]byte(randomPassword), bcrypt.DefaultCost)
+		now := time.Now()
+		user := &models.User{ID: uuid.New().String(), TenantID: tenantID, Email: email, DisplayName: displayName, Status: "active", PasswordHash: string(passwordHash), CreatedAt: now, UpdatedAt: now}
+		if err := userRepo.Create(user); err != nil {
+			return `{"error": "创建用户失败: ` + err.Error() + `"}`
+		}
+		if roleName != "" {
+			if role, err := roleRepo.GetByName(tenantID, roleName); err == nil && role != nil {
+				_ = userRoleRepo.Assign(user.ID, role.ID)
+			}
+		}
+		logAudit(ctx, tenantID, userID, "create_user", "create", "user", fmt.Sprintf("创建用户: %s", email))
+		return `{"success": true, "id": "` + user.ID + `", "message": "用户 ` + email + ` 创建成功；未设置明文密码，请通过重置密码或SSO登录。"}`
+
 	case "assign_role":
 		userEmail, _ := args["user_email"].(string)
 		roleName, _ := args["role_name"].(string)
@@ -1092,7 +1837,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err := userRoleRepo.Assign(user.ID, role.ID); err != nil {
 			return `{"error": "分配角色失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "assign_role", "assign", "user_role", fmt.Sprintf("为用户 %s 分配角色 %s", userEmail, roleName))
+		logAudit(ctx, tenantID, userID, "assign_role", "assign", "user_role", fmt.Sprintf("为用户 %s 分配角色 %s", userEmail, roleName))
 		return `{"success": true, "message": "已为用户 ` + userEmail + ` 分配角色 ` + roleName + `"}`
 
 	case "revoke_role":
@@ -1109,7 +1854,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err := userRoleRepo.Revoke(user.ID, role.ID); err != nil {
 			return `{"error": "撤销角色失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "revoke_role", "revoke", "user_role", fmt.Sprintf("撤销用户 %s 的角色 %s", userEmail, roleName))
+		logAudit(ctx, tenantID, userID, "revoke_role", "revoke", "user_role", fmt.Sprintf("撤销用户 %s 的角色 %s", userEmail, roleName))
 		return `{"success": true, "message": "已撤销用户 ` + userEmail + ` 的角色 ` + roleName + `"}`
 
 	case "list_roles":
@@ -1128,6 +1873,34 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		}
 		data, _ := json.Marshal(result)
 		return string(data)
+
+	case "create_role":
+		name, _ := args["name"].(string)
+		if name == "" {
+			return `{"error": "name 为必填项"}`
+		}
+		if existing, err := roleRepo.GetByName(tenantID, name); err == nil && existing != nil {
+			return `{"success": true, "id": "` + existing.ID + `", "message": "角色已存在，未重复创建"}`
+		}
+		desc, _ := args["description"].(string)
+		tools := jsonStringArg(args, "tools", "[]")
+		allowedMCPTools := jsonStringArg(args, "allowed_mcp_tools", "[]")
+		allowedSkills := jsonStringArg(args, "allowed_skills", "[]")
+		dataScope, _ := args["data_scope"].(string)
+		if dataScope == "" {
+			dataScope = "tenant"
+		}
+		rateLimit, _ := args["rate_limit"].(string)
+		if rateLimit == "" {
+			rateLimit = "500/hour"
+		}
+		now := time.Now()
+		role := &models.Role{ID: uuid.New().String(), TenantID: tenantID, Name: name, Description: toPtr(desc), Tools: toPtr(tools), AllowedMCPTools: toPtr(allowedMCPTools), AllowedSkills: toPtr(allowedSkills), RateLimit: toPtr(rateLimit), DataScope: toPtr(dataScope), IsSystem: false, IsDefault: false, CreatedAt: now, UpdatedAt: now}
+		if err := roleRepo.Create(role); err != nil {
+			return `{"error": "创建角色失败: ` + err.Error() + `"}`
+		}
+		logAudit(ctx, tenantID, userID, "create_role", "create", "role", fmt.Sprintf("创建角色: %s", name))
+		return `{"success": true, "id": "` + role.ID + `", "message": "角色 ` + name + ` 创建成功"}`
 
 	case "list_connectors":
 		connectors, err := queryMaps("SELECT CAST(id AS CHAR) as id, CAST(name AS CHAR) as name, CAST(type AS CHAR) as type, CAST(base_url AS CHAR) as base_url, CAST(status AS CHAR) as status, tools_count FROM connectors WHERE tenant_id = ?", tenantID)
@@ -1205,7 +1978,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if _, err := database.DB.Exec(query, args_sql...); err != nil {
 			return `{"error": "更新租户失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "update_tenant", "update", "tenant", fmt.Sprintf("更新租户配置: %v", args))
+		logAudit(ctx, tenantID, userID, "update_tenant", "update", "tenant", fmt.Sprintf("更新租户配置: %v", args))
 		return `{"success": true, "message": "租户配置已更新"}`
 
 	// ========== 连接器工具 ==========
@@ -1236,7 +2009,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err != nil {
 			return `{"error": "创建连接器失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "create_connector", "create", "connector", fmt.Sprintf("创建连接器: %s (%s)", name, connType))
+		logAudit(ctx, tenantID, userID, "create_connector", "create", "connector", fmt.Sprintf("创建连接器: %s (%s)", name, connType))
 		return `{"success": true, "id": "` + id + `", "message": "连接器 ` + name + ` 创建成功"}`
 
 	case "update_connector":
@@ -1272,7 +2045,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if _, err := database.DB.Exec(query, args_sql...); err != nil {
 			return `{"error": "更新连接器失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "update_connector", "update", "connector", fmt.Sprintf("更新连接器 %s: %v", connectorID, args))
+		logAudit(ctx, tenantID, userID, "update_connector", "update", "connector", fmt.Sprintf("更新连接器 %s: %v", connectorID, args))
 		return `{"success": true, "message": "连接器更新成功"}`
 
 	// ========== MCP工具 ==========
@@ -1310,7 +2083,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err != nil {
 			return `{"error": "创建MCP工具失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "create_mcp_tool", "create", "mcp_tool", fmt.Sprintf("创建MCP工具: %s %s %s", name, method, path))
+		logAudit(ctx, tenantID, userID, "create_mcp_tool", "create", "mcp_tool", fmt.Sprintf("创建MCP工具: %s %s %s", name, method, path))
 		return `{"success": true, "id": "` + id + `", "message": "MCP工具 ` + name + ` 创建成功"}`
 
 	case "update_mcp_tool":
@@ -1356,7 +2129,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if _, err := database.DB.Exec(query, args_sql...); err != nil {
 			return `{"error": "更新MCP工具失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "update_mcp_tool", "update", "mcp_tool", fmt.Sprintf("更新MCP工具 %s: %v", toolID, args))
+		logAudit(ctx, tenantID, userID, "update_mcp_tool", "update", "mcp_tool", fmt.Sprintf("更新MCP工具 %s: %v", toolID, args))
 		return `{"success": true, "message": "MCP工具更新成功"}`
 
 	// ========== 技能工具 ==========
@@ -1415,7 +2188,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err != nil {
 			return `{"error": "创建技能失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "create_skill", "create", "skill", fmt.Sprintf("创建技能: %s", name))
+		logAudit(ctx, tenantID, userID, "create_skill", "create", "skill", fmt.Sprintf("创建技能: %s", name))
 		return `{"success": true, "id": "` + id + `", "message": "技能 ` + name + ` 创建成功"}`
 
 	case "update_skill":
@@ -1423,9 +2196,12 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if skillID == "" {
 			return `{"error": "skill_id 为必填项"}`
 		}
-		existing, _ := queryMaps("SELECT id FROM skills WHERE id = ? AND tenant_id = ?", skillID, tenantID)
+		existing, _ := queryMaps("SELECT id, CAST(created_by AS CHAR) as created_by FROM skills WHERE id = ? AND tenant_id = ?", skillID, tenantID)
 		if len(existing) == 0 {
 			return `{"error": "技能不存在或不属于当前租户"}`
+		}
+		if createdBy, _ := existing[0]["created_by"].(string); createdBy == "system" {
+			return `{"error": "内置技能不可编辑"}`
 		}
 		sets := []string{}
 		args_sql := []any{}
@@ -1454,7 +2230,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if _, err := database.DB.Exec(query, args_sql...); err != nil {
 			return `{"error": "更新技能失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "update_skill", "update", "skill", fmt.Sprintf("更新技能 %s: %v", skillID, args))
+		logAudit(ctx, tenantID, userID, "update_skill", "update", "skill", fmt.Sprintf("更新技能 %s: %v", skillID, args))
 		return `{"success": true, "message": "技能更新成功"}`
 
 	case "execute_skill":
@@ -1468,8 +2244,15 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if err != nil {
 			return `{"error": "技能不存在或不属于当前租户"}`
 		}
-		if skill.Status != "active" {
-			return `{"error": "技能状态不是active，无法执行"}`
+		executionMode := executionModeFromArgs(args)
+		if userID != "" {
+			permissions, _ := middleware.GetUserPermissions(userID)
+			if _, _, hasWildcard := getUserAllowedMCPSkills(userID); !hasWildcard {
+				if missingPermissions, err := missingPermissionsForSkillSteps(skill.Steps, permissions); err == nil && len(missingPermissions) > 0 {
+					data, _ := json.Marshal(map[string]any{"error": skillMissingPermissionMessage(skill.Name, missingPermissions), "permission_denied": true})
+					return string(data)
+				}
+			}
 		}
 		// 获取输入参数
 		inputs, _ := args["inputs"].(map[string]any)
@@ -1478,10 +2261,31 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		}
 		// 创建MCP caller函数
 		mcpCaller := func(ctx context.Context, toolName string, arguments json.RawMessage) (map[string]interface{}, error) {
+			var builtinArgs map[string]any
+			_ = json.Unmarshal(arguments, &builtinArgs)
+			if isBuiltinSkillTool(toolName) {
+				result := h.executeTool(tenantID, userID, toolName, builtinArgs)
+				status, statusErr := toolCallStatusFromResult(result)
+				if statusErr != nil || status == "failed" {
+					return nil, statusErr
+				}
+				var resultMap map[string]interface{}
+				if err := json.Unmarshal([]byte(result), &resultMap); err != nil {
+					return map[string]interface{}{"result": result}, nil
+				}
+				if denied, _ := resultMap["permission_denied"].(bool); denied {
+					message, _ := resultMap["error"].(string)
+					return nil, fmt.Errorf("%s", message)
+				}
+				return resultMap, nil
+			}
 			// 查找MCP工具
 			var mcpTool models.MCPTool
 			if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", toolName, tenantID); err != nil {
 				return nil, fmt.Errorf("MCP tool not found: %s", toolName)
+			}
+			if err := skillPkg.CanExecuteMCPTool(mcpTool, executionMode); err != nil {
+				return nil, err
 			}
 			// 获取连接器
 			var connector models.Connector
@@ -1490,7 +2294,8 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			}
 			// 通过MCP Proxy调用
 			mcpHandler := NewMCPHandler()
-			resp, callErr := mcpHandler.proxy.CallTool(ctx, easpMCP.ToolCallRequest{
+			ctxWithToken := contextWithUserSSOToken(ctx, tenantID, userID)
+			resp, callErr := mcpHandler.proxy.CallTool(ctxWithToken, easpMCP.ToolCallRequest{
 				Tool:      mcpTool,
 				Connector: connector,
 				Arguments: arguments,
@@ -1509,13 +2314,13 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		}
 		// 调用SkillEngine执行
 		engine := skillPkg.NewSkillEngineWithCaller(tenantID, mcpCaller)
-		execution, execErr := engine.Execute(context.Background(), skill, inputs)
+		execution, execErr := engine.ExecuteWithMode(context.Background(), skill, inputs, executionMode)
 		if execErr != nil {
 			return `{"error": "技能执行失败: ` + execErr.Error() + `"}`
 		}
 		// 更新使用次数
 		database.DB.Exec("UPDATE skills SET usage_count = usage_count + 1, last_used_at = NOW() WHERE id = ?", skillID)
-		logAudit(tenantID, userID, "execute_skill", "execute", "skill", fmt.Sprintf("执行技能 %s", skill.Name))
+		logAudit(ctx, tenantID, userID, "execute_skill", "execute", "skill", fmt.Sprintf("执行技能 %s", skill.Name))
 		outputsJSON, _ := json.Marshal(execution.Outputs)
 		return `{"success": true, "skill_name": "` + skill.Name + `", "execution_id": "` + execution.ID + `", "status": "` + execution.Status + `", "outputs": ` + string(outputsJSON) + `}`
 
@@ -1524,42 +2329,46 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if toolID == "" {
 			return `{"error": "tool_id 为必填项"}`
 		}
-		// 验证MCP工具属于当前租户且启用
-		toolRows, _ := queryMaps("SELECT CAST(id AS CHAR) as id, CAST(name AS CHAR) as name, CAST(connector_id AS CHAR) as connector_id, enabled FROM mcp_tools WHERE id = ? AND tenant_id = ?", toolID, tenantID)
-		if len(toolRows) == 0 {
+		// 验证MCP工具属于当前租户且启用，并按执行模式做生命周期收口。
+		var mcpTool models.MCPTool
+		if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE id = ? AND tenant_id = ?", toolID, tenantID); err != nil {
 			return `{"error": "MCP工具不存在或不属于当前租户"}`
 		}
-		tool := toolRows[0]
-		if enabled, ok := tool["enabled"].(bool); ok && !enabled {
+		if !mcpTool.Enabled {
 			return `{"error": "MCP工具已禁用"}`
 		}
-		// 获取连接器信息
-		connectorID, _ := tool["connector_id"].(string)
-		connRows, _ := queryMaps("SELECT CAST(id AS CHAR) as id, CAST(name AS CHAR) as name, CAST(base_url AS CHAR) as base_url, CAST(transport_type AS CHAR) as transport_type, CAST(mcp_server_url AS CHAR) as mcp_server_url, CAST(headers AS CHAR) as headers, CAST(auth_type AS CHAR) as auth_type, CAST(auth_config AS CHAR) as auth_config FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
-		if len(connRows) == 0 {
-			return `{"error": "连接器不存在"}`
+		executionMode := executionModeFromArgs(args)
+		if err := skillPkg.CanExecuteMCPTool(mcpTool, executionMode); err != nil {
+			return `{"error": "` + err.Error() + `", "execution_mode": "` + executionMode + `"}`
 		}
-		// 调用MCP工具
 		arguments, _ := args["arguments"].(map[string]any)
 		argumentsJSON, _ := json.Marshal(arguments)
-		connector := connRows[0]
-		mcpServerURL, _ := connector["mcp_server_url"].(string)
-		if mcpServerURL == "" {
-			return `{"error": "连接器未配置MCP Server URL"}`
+		logAudit(ctx, tenantID, userID, "execute_mcp_tool", "execute", "mcp_tool", fmt.Sprintf("调用MCP工具 %s", mcpTool.Name))
+		if skillPkg.ShouldSkipSideEffects(executionMode) {
+			return `{"success": true, "tool_name": "` + mcpTool.Name + `", "execution_mode": "` + executionMode + `", "dry_run": true, "message": "沙箱/预演模式未执行MCP外部调用", "arguments": ` + string(argumentsJSON) + `}`
 		}
-		// 通过MCP Client调用
-		transportType, _ := connector["transport_type"].(string)
-		toolName, _ := tool["name"].(string)
-		_ = transportType
-		logAudit(tenantID, userID, "execute_mcp_tool", "execute", "mcp_tool", fmt.Sprintf("调用MCP工具 %s", toolName))
-		// 简化实现：通过HTTP直接调用MCP Server
-		return `{"success": true, "tool_name": "` + toolName + `", "arguments": ` + string(argumentsJSON) + `}`
+		// 简化实现：当前AI内置 execute_mcp_tool 只回显调用计划；动态 mcp_* 路由负责真实MCP代理调用。
+		return `{"success": true, "tool_name": "` + mcpTool.Name + `", "execution_mode": "` + executionMode + `", "arguments": ` + string(argumentsJSON) + `}`
 
 	// ========== 记忆工具 ==========
 	case "list_memory_pools":
-		pools, err := queryMaps("SELECT CAST(id AS CHAR) as id, CAST(level AS CHAR) as level, CAST(owner_id AS CHAR) as owner_id, CAST(name AS CHAR) as name, created_at FROM memory_pools WHERE tenant_id = ?", tenantID)
+		pools, err := queryMaps(`
+			SELECT CAST(id AS CHAR) as id,
+			       CAST(type AS CHAR) as type,
+			       CAST(purpose AS CHAR) as purpose,
+			       CAST(owner_id AS CHAR) as owner_id,
+			       CAST(name AS CHAR) as name,
+			       CAST(description AS CHAR) as description,
+			       priority, max_tokens, auto_activate, enabled, memory_count, created_at, updated_at
+			FROM memory_pools
+			WHERE tenant_id = ?
+			ORDER BY priority DESC, created_at DESC`, tenantID)
 		if err != nil {
-			return `{"error": "查询记忆池失败: ` + err.Error() + `"}`
+			logger.Warn("chat", "list memory pools failed",
+				logger.Field("tenant_id", tenantID),
+				logger.Field("error", err.Error()),
+			)
+			return `{"error": "查询记忆池失败，请稍后重试"}`
 		}
 		data, _ := json.Marshal(pools)
 		return string(data)
@@ -1587,27 +2396,58 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 
 	case "create_memory_pool":
 		name, _ := args["name"].(string)
-		level, _ := args["level"].(string)
-		if name == "" || level == "" {
-			return `{"error": "name 和 level 为必填项"}`
+		if name == "" {
+			return `{"error": "name 为必填项"}`
 		}
+		poolType, _ := args["type"].(string)
+		if poolType == "" {
+			// 兼容旧工具参数 level：tenant/role 映射为 team，user 映射为 personal。
+			if legacyLevel, _ := args["level"].(string); legacyLevel != "" {
+				switch legacyLevel {
+				case "tenant", "role":
+					poolType = "team"
+				case "user":
+					poolType = "personal"
+				default:
+					poolType = "personal"
+				}
+			} else {
+				poolType = "personal"
+			}
+		}
+		purpose, _ := args["purpose"].(string)
+		if purpose == "" {
+			purpose = "conversation"
+		}
+		description, _ := args["description"].(string)
 		ownerID, _ := args["owner_id"].(string)
 		id := uuid.New().String()
 		now := time.Now()
-		_, err := database.DB.Exec(`INSERT INTO memory_pools (id, tenant_id, level, owner_id, name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			id, tenantID, level, ownerID, name, now)
+		_, err := database.DB.Exec(`
+			INSERT INTO memory_pools
+			(id, tenant_id, name, description, type, purpose, priority, max_tokens, auto_activate, owner_id, enabled, memory_count, created_at, updated_at)
+			VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, 5, 0, 1, NULLIF(?, ''), 1, 0, ?, ?)`,
+			id, tenantID, name, description, poolType, purpose, ownerID, now, now)
 		if err != nil {
-			return `{"error": "创建记忆池失败: ` + err.Error() + `"}`
+			logger.Warn("chat", "create memory pool failed",
+				logger.Field("tenant_id", tenantID),
+				logger.Field("name", name),
+				logger.Field("error", err.Error()),
+			)
+			return `{"error": "创建记忆池失败，请稍后重试"}`
 		}
-		logAudit(tenantID, userID, "create_memory_pool", "create", "memory_pool", fmt.Sprintf("创建记忆池: %s (level=%s)", name, level))
+		logAudit(ctx, tenantID, userID, "create_memory_pool", "create", "memory_pool", fmt.Sprintf("创建记忆池: %s (type=%s purpose=%s)", name, poolType, purpose))
 		return `{"success": true, "id": "` + id + `", "message": "记忆池 ` + name + ` 创建成功"}`
 
 	case "create_memory_entry":
 		poolID, _ := args["pool_id"].(string)
 		entryType, _ := args["type"].(string)
 		content, _ := args["content"].(string)
-		if poolID == "" || entryType == "" || content == "" {
-			return `{"error": "pool_id, type, content 为必填项"}`
+		if entryType == "" {
+			entryType = "fact"
+		}
+		if poolID == "" || content == "" {
+			return `{"error": "pool_id 和 content 为必填项"}`
 		}
 		// 验证记忆池属于当前租户
 		pool, _ := queryMaps("SELECT id FROM memory_pools WHERE id = ? AND tenant_id = ?", poolID, tenantID)
@@ -1618,15 +2458,17 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if sensitivity == "" {
 			sensitivity = "low"
 		}
-		id := uuid.New().String()
-		now := time.Now()
-		_, err := database.DB.Exec(`INSERT INTO memory_entries (id, pool_id, type, content, sensitivity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			id, poolID, entryType, content, sensitivity, now, now)
-		if err != nil {
+		entry := &models.MemoryEntry{
+			PoolID:      poolID,
+			Type:        entryType,
+			Content:     content,
+			Sensitivity: sensitivity,
+		}
+		if err := repositories.NewMemoryEntryRepository().Create(entry); err != nil {
 			return `{"error": "创建记忆条目失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "create_memory_entry", "create", "memory_entry", fmt.Sprintf("创建记忆条目: pool=%s type=%s", poolID, entryType))
-		return `{"success": true, "id": "` + id + `", "message": "记忆条目创建成功"}`
+		logAudit(ctx, tenantID, userID, "create_memory_entry", "create", "memory_entry", fmt.Sprintf("创建记忆条目: pool=%s type=%s", poolID, entryType))
+		return `{"success": true, "id": "` + entry.ID + `", "message": "记忆条目创建成功"}`
 
 	case "update_memory_entry":
 		entryID, _ := args["entry_id"].(string)
@@ -1657,7 +2499,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if _, err := database.DB.Exec(query, args_sql...); err != nil {
 			return `{"error": "更新记忆条目失败: ` + err.Error() + `"}`
 		}
-		logAudit(tenantID, userID, "update_memory_entry", "update", "memory_entry", fmt.Sprintf("更新记忆条目 %s: %v", entryID, args))
+		logAudit(ctx, tenantID, userID, "update_memory_entry", "update", "memory_entry", fmt.Sprintf("更新记忆条目 %s: %v", entryID, args))
 		return `{"success": true, "message": "记忆条目更新成功"}`
 
 	default:
@@ -1674,7 +2516,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 				isPrefixedSkillTool = skillIDPrefixRegex.MatchString(idPrefix)
 				if isPrefixedSkillTool {
 					var candidates []models.Skill
-					err = database.DB.Select(&candidates, "SELECT * FROM skills WHERE REPLACE(id, '-', '') LIKE ? AND tenant_id = ? AND status = 'active'", idPrefix+"%", tenantID)
+					err = database.DB.Select(&candidates, "SELECT * FROM skills WHERE REPLACE(id, '-', '') LIKE ? AND tenant_id = ? AND status IN ('published', 'active')", idPrefix+"%", tenantID)
 					if err == nil {
 						for _, candidate := range candidates {
 							if makeSkillToolName(candidate) == toolName {
@@ -1690,7 +2532,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			}
 			if !isPrefixedSkillTool && (err != nil || sk.ID == "") {
 				// 兼容旧格式：skill_{name}。前缀格式必须完整匹配生成名，不再回退到名称查找。
-				err = database.DB.Get(&sk, "SELECT * FROM skills WHERE name = ? AND tenant_id = ? AND status = 'active'", skillKey, tenantID)
+				err = database.DB.Get(&sk, "SELECT * FROM skills WHERE name = ? AND tenant_id = ? AND status IN ('published', 'active')", skillKey, tenantID)
 			}
 			if err != nil || sk.ID == "" {
 				data, _ := json.Marshal(map[string]any{"error": "技能不存在或未激活: " + skillKey})
@@ -1702,12 +2544,23 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 					data, _ := json.Marshal(map[string]any{"error": "无权执行技能: " + sk.Name})
 					return string(data)
 				}
+				if !hasWildcard {
+					permissions, _ := middleware.GetUserPermissions(userID)
+					if missingPermissions, err := missingPermissionsForSkillSteps(sk.Steps, permissions); err == nil && len(missingPermissions) > 0 {
+						data, _ := json.Marshal(map[string]any{"error": skillMissingPermissionMessage(sk.Name, missingPermissions), "permission_denied": true})
+						return string(data)
+					}
+				}
 			}
+			executionMode := executionModeFromArgs(args)
 			// 创建MCP caller
 			mcpCaller := func(ctx context.Context, toolName string, arguments json.RawMessage) (map[string]interface{}, error) {
 				var mcpTool models.MCPTool
 				if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", toolName, tenantID); err != nil {
 					return nil, fmt.Errorf("MCP tool not found: %s", toolName)
+				}
+				if err := skillPkg.CanExecuteMCPTool(mcpTool, executionMode); err != nil {
+					return nil, err
 				}
 				var connector models.Connector
 				if err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ?", mcpTool.ConnectorID); err != nil {
@@ -1733,24 +2586,33 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			}
 			// 执行Skill
 			engine := skillPkg.NewSkillEngineWithCaller(tenantID, mcpCaller)
-			execution, execErr := engine.Execute(context.Background(), sk, args)
+			execution, execErr := engine.ExecuteWithMode(context.Background(), sk, args, executionMode)
 			if execErr != nil {
 				return `{"error": "技能执行失败: ` + execErr.Error() + `"}`
 			}
 			// 更新使用次数
 			database.DB.Exec("UPDATE skills SET usage_count = usage_count + 1, last_used_at = NOW() WHERE id = ?", sk.ID)
-			logAudit(tenantID, userID, "skill_call", "execute", "skill", fmt.Sprintf("执行技能 %s", sk.Name))
+			logAudit(ctx, tenantID, userID, "skill_call", "execute", "skill", fmt.Sprintf("执行技能 %s", sk.Name))
 			outputsJSON, _ := json.Marshal(execution.Outputs)
 			return `{"success": true, "skill_name": "` + sk.Name + `", "execution_id": "` + execution.ID + `", "status": "` + execution.Status + `", "outputs": ` + string(outputsJSON) + `}`
 		}
 		// 检查是否是MCP工具调用（名称以 mcp_ 开头）
 		if strings.HasPrefix(toolName, "mcp_") {
 			mcpToolName := strings.TrimPrefix(toolName, "mcp_")
+			executionMode := executionModeFromArgs(args)
 			// 查找MCP工具
 			var mcpTool models.MCPTool
 			err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", mcpToolName, tenantID)
 			if err != nil {
 				return `{"error": "MCP工具不存在或已禁用: ` + mcpToolName + `"}`
+			}
+			if err := skillPkg.CanExecuteMCPTool(mcpTool, executionMode); err != nil {
+				return `{"error": "` + err.Error() + `", "execution_mode": "` + executionMode + `"}`
+			}
+			// 构造MCP调用参数
+			argumentsJSON, _ := json.Marshal(args)
+			if skillPkg.ShouldSkipSideEffects(executionMode) {
+				return `{"success": true, "tool_name": "` + mcpTool.Name + `", "execution_mode": "` + executionMode + `", "dry_run": true, "message": "沙箱/预演模式未执行MCP外部调用", "arguments": ` + string(argumentsJSON) + `}`
 			}
 			// 获取连接器
 			var connector models.Connector
@@ -1758,8 +2620,6 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			if err != nil {
 				return `{"error": "连接器不存在"}`
 			}
-			// 构造MCP调用参数
-			argumentsJSON, _ := json.Marshal(args)
 			// 调用MCP工具
 			mcpHandler := NewMCPHandler()
 			result, callErr := mcpHandler.proxy.CallTool(context.Background(), easpMCP.ToolCallRequest{
@@ -1770,7 +2630,7 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			if callErr != nil {
 				return `{"error": "MCP工具调用失败: ` + callErr.Error() + `"}`
 			}
-			logAudit(tenantID, userID, "mcp_tool_call", "execute", "mcp_tool", fmt.Sprintf("调用MCP工具 %s: %s", mcpToolName, string(argumentsJSON)))
+			logAudit(ctx, tenantID, userID, "mcp_tool_call", "execute", "mcp_tool", fmt.Sprintf("调用MCP工具 %s: %s", mcpToolName, string(argumentsJSON)))
 			resultJSON, _ := json.Marshal(result)
 			return string(resultJSON)
 		}
@@ -1816,24 +2676,33 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	}
 
 	tid := tenantID.(string)
+	uid := userID.(string)
 	requestStart := time.Now()
 	requestID := logger.GetRequestID(c)
 	if requestID == "" {
 		requestID = uuid.New().String()
 	}
+	conversationID := ensureAssistantConversation(tid, uid, &req)
 	logger.Info("chat", "chat stream started",
 		logger.Field("request_id", requestID),
 		logger.Field("tenant_id", tid),
-		logger.Field("user_id", userID),
+		logger.Field("user_id", uid),
+		logger.Field("conversation_id", conversationID),
 		logger.Field("messages", len(req.Messages)),
 		logger.Field("client_ip", c.ClientIP()),
 	)
+
+	activity := newAssistantActivityTracker(120 * time.Second)
 
 	// 设置SSE headers
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	sendSSEActive(c, activity, SSEEventConversation, map[string]any{
+		"conversation_id": conversationID,
+		"request_id":      requestID,
+	})
 
 	// 根据用户权限动态过滤工具
 	var tools []ToolDefinition
@@ -1884,7 +2753,8 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	}
 
 	// 加载Skills并转为function calling工具定义（智能路由核心）
-	skillToolDefs := loadSkillToolDefinitions(tid, allowedSkills, hasWildcard)
+	skillLoadResult := loadSkillToolDefinitions(tid, allowedSkills, hasWildcard, permissions)
+	skillToolDefs := skillLoadResult.Tools
 	if len(skillToolDefs) > 0 {
 		tools = append(tools, skillToolDefs...)
 	}
@@ -1905,19 +2775,27 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	)
 
 	// 获取用户最新消息用于记忆检索
-	lastUserMsg := ""
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			lastUserMsg = req.Messages[i].Content
-			break
-		}
+	lastUserMsg := lastUserMessage(req.Messages)
+	if intent, missingPermissions := assistantIntentMissingPermissions(lastUserMsg, permissions); len(missingPermissions) > 0 {
+		reply := skillMissingPermissionMessage(intent, missingPermissions)
+		sendAssistantBufferedDelta(c, activity, reply)
+		saveConversationMessage(tid, uid, conversationID, "user", lastUserMsg)
+		saveConversationMessage(tid, uid, conversationID, "assistant", reply)
+		sendSSEActive(c, activity, SSEEventDone, map[string]any{
+			"total_ms":          time.Since(requestStart).Milliseconds(),
+			"conversation_id":   conversationID,
+			"permission_denied": true,
+		})
+		return
 	}
 
 	// 记忆路由器：按需加载记忆（租户隔离 + 用户隔离 + 角色感知）
-	memCtx := h.memoryRouter.LoadMemories(tid, userID.(string), lastUserMsg, permissions)
+	memCtx := h.memoryRouter.LoadMemories(tid, uid, lastUserMsg, permissions)
 
 	// 动态构建system prompt（注入记忆上下文 + 可用技能信息）
-	basePrompt := getSystemPrompt(tid, toolNames)
+	unavailableCapabilities := unavailableCapabilityLinesForMissingPermissions(permissions)
+	unavailableCapabilities = append(unavailableCapabilities, skillLoadResult.UnavailableCapabilities...)
+	basePrompt := getSystemPrompt(tid, toolNames, unavailableCapabilities) + buildPageContextPrompt(req.PageContext)
 
 	// 注入可用技能信息到system prompt
 	if len(allowedSkills) > 0 || hasWildcard {
@@ -1925,13 +2803,17 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		if hasWildcard {
 			// 管理员可以看到所有技能
 			var allSkills []models.Skill
-			database.DB.Select(&allSkills, "SELECT id, name, description, category, status FROM skills WHERE tenant_id = ? AND status = 'active'", tid)
+			database.DB.Select(&allSkills, "SELECT id, name, description, category, status FROM skills WHERE tenant_id = ? AND status IN ('published', 'active')", tid)
 			for _, s := range allSkills {
 				skillIDs = append(skillIDs, s.ID)
 			}
 			if len(allSkills) > 0 {
 				skillInfo := "\n\n## 可用技能\n你可以通过 execute_skill 工具执行以下技能：\n"
-				for _, s := range allSkills {
+				for i, s := range allSkills {
+					if i >= 10 {
+						skillInfo += fmt.Sprintf("- 其余 %d 个技能可通过 list_skills 查询。\n", len(allSkills)-i)
+						break
+					}
 					desc := ""
 					if s.Description != nil {
 						desc = *s.Description
@@ -1953,11 +2835,15 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 					args[i] = id
 				}
 				var skills []models.Skill
-				query := "SELECT id, name, description, category, status FROM skills WHERE id IN (" + strings.Join(placeholders, ",") + ") AND status = 'active'"
+				query := "SELECT id, name, description, category, status FROM skills WHERE id IN (" + strings.Join(placeholders, ",") + ") AND status IN ('published', 'active')"
 				database.DB.Select(&skills, query, args...)
 				if len(skills) > 0 {
 					skillInfo := "\n\n## 可用技能\n你可以通过 execute_skill 工具执行以下技能：\n"
-					for _, s := range skills {
+					for i, s := range skills {
+						if i >= 10 {
+							skillInfo += fmt.Sprintf("- 其余 %d 个技能可通过 list_skills 查询。\n", len(skills)-i)
+							break
+						}
 						desc := ""
 						if s.Description != nil {
 							desc = *s.Description
@@ -1976,7 +2862,7 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 	// 发送记忆加载状态
 	if memCtx != nil && (len(memCtx.UserMemories) > 0 || len(memCtx.SkillMemories) > 0) {
 		totalMem := len(memCtx.UserMemories) + len(memCtx.SkillMemories) + len(memCtx.Entities) + len(memCtx.RoleMemories)
-		sendSSE(c, SSEEventStatus, map[string]any{
+		sendSSEActive(c, activity, SSEEventStatus, map[string]any{
 			"message":    fmt.Sprintf("已加载 %d 条相关记忆", totalMem),
 			"stage":      "memory",
 			"elapsed_ms": time.Since(requestStart).Milliseconds(),
@@ -2001,20 +2887,33 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		"provider":     providerName,
 	})
 
-	// 构建消息
+	// 构建消息：服务端会话历史为主，限制历史长度以降低模型理解时间。
+	modelMessages := append(loadConversationMessages(tid, uid, conversationID, 10), req.Messages...)
+	if len(modelMessages) == 0 {
+		modelMessages = req.Messages
+	}
 	messages := []modelservice.Message{
 		{Role: "system", Content: systemPrompt},
 	}
-	for _, m := range req.Messages {
-		messages = append(messages, modelservice.Message{Role: m.Role, Content: m.Content})
+	for _, m := range modelMessages {
+		role := strings.TrimSpace(m.Role)
+		if role != "user" && role != "assistant" && role != "system" {
+			continue
+		}
+		content := strings.TrimSpace(m.Content)
+		if content == "" {
+			continue
+		}
+		messages = append(messages, modelservice.Message{Role: role, Content: content})
 	}
+	saveConversationMessage(tid, uid, conversationID, "user", lastUserMsg)
 
-	// 多轮工具调用循环（最多5轮）
-	for round := 0; round < 5; round++ {
+	// 多轮工具调用循环：按活动续期，避免固定总耗时误杀；仍限制轮数防止模型循环。
+	for round := 0; round < 8; round++ {
 		roundStart := time.Now()
 
 		// 发送思考阶段状态
-		sendSSE(c, SSEEventStatus, map[string]any{
+		sendSSEActive(c, activity, SSEEventStatus, map[string]any{
 			"message":    "正在思考...",
 			"stage":      "thinking",
 			"round":      round + 1,
@@ -2023,7 +2922,7 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		})
 
 		// 调用模型（非流式，因为需要解析tool_calls）；等待期间持续发送 heartbeat
-		response, err := waitModelWithHeartbeat(c, requestStart, "thinking", fmt.Sprintf("正在思考...（第 %d 轮）", round+1), func() (*ModelResponse, error) {
+		response, err := waitModelWithHeartbeat(c, requestStart, activity, "thinking", fmt.Sprintf("正在思考...（第 %d 轮）", round+1), func() (*ModelResponse, error) {
 			return h.callModelWithTools(tid, messages, tools)
 		})
 		modelElapsed := time.Since(roundStart).Milliseconds()
@@ -2086,7 +2985,7 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 			messages = append(messages, assistantMsg)
 
 			// 发送分析完成状态
-			sendSSE(c, SSEEventStatus, map[string]any{
+			sendSSEActive(c, activity, SSEEventStatus, map[string]any{
 				"message":    fmt.Sprintf("模型决定调用 %d 个工具", len(response.ToolCalls)),
 				"stage":      "plan",
 				"stage_ms":   modelElapsed,
@@ -2099,7 +2998,7 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 				toolStart := time.Now()
 
 				// 发送工具执行中状态
-				sendSSE(c, SSEEventStatus, map[string]any{
+				sendSSEActive(c, activity, SSEEventStatus, map[string]any{
 					"message":    "正在" + getToolDisplayName(tc.Function.Name) + "...",
 					"stage":      "tool_calling",
 					"tool_name":  tc.Function.Name,
@@ -2111,9 +3010,32 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 
 				var args map[string]any
 				json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				if deniedResult, denied := toolPermissionDeniedResult(tc.Function.Name, skillLoadResult.UnavailableByToolName); denied {
+					sendSSEActive(c, activity, SSEEventTool, map[string]any{
+						"name":       tc.Function.Name,
+						"result":     deniedResult,
+						"elapsed_ms": int64(0),
+					})
+					if reply, ok := permissionDeniedReplyFromToolResult(deniedResult); ok {
+						sendAssistantBufferedDelta(c, activity, reply)
+						saveConversationMessage(tid, uid, conversationID, "assistant", reply)
+						sendSSEActive(c, activity, SSEEventDone, map[string]any{
+							"total_ms":          time.Since(requestStart).Milliseconds(),
+							"conversation_id":   conversationID,
+							"permission_denied": true,
+						})
+						return
+					}
+				}
 				toolMessage := "正在" + getToolDisplayName(tc.Function.Name) + "..."
-				result, toolWaitErr := waitToolWithHeartbeat(c, requestStart, "tool_calling", toolMessage, func() string {
-					return h.executeTool(tid, userID.(string), tc.Function.Name, args)
+				auditCtx := &auditContext{
+					AgentID:   requestID,
+					IP:        c.ClientIP(),
+					UserAgent: c.Request.UserAgent(),
+					StartedAt: toolStart,
+				}
+				result, toolWaitErr := waitToolWithHeartbeat(c, requestStart, activity, "tool_calling", toolMessage, func() string {
+					return h.executeTool(tid, userID.(string), tc.Function.Name, args, auditCtx)
 				})
 				if toolWaitErr != nil {
 					logger.Warn("chat", "tool execution interrupted",
@@ -2132,11 +3054,21 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 					"ai_assistant", status, int(toolElapsed), requestID, resultErr)
 
 				// 发送工具结果事件
-				sendSSE(c, SSEEventTool, map[string]any{
+				sendSSEActive(c, activity, SSEEventTool, map[string]any{
 					"name":       tc.Function.Name,
 					"result":     result,
 					"elapsed_ms": toolElapsed,
 				})
+				if reply, ok := requiresInputReplyFromToolResult(result, lastUserMsg); ok {
+					sendAssistantBufferedDelta(c, activity, reply)
+					saveConversationMessage(tid, uid, conversationID, "assistant", reply)
+					sendSSEActive(c, activity, SSEEventDone, map[string]any{
+						"total_ms":        time.Since(requestStart).Milliseconds(),
+						"conversation_id": conversationID,
+						"requires_input":  true,
+					})
+					return
+				}
 
 				messages = append(messages, modelservice.Message{
 					Role:       "tool",
@@ -2149,7 +3081,7 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 		}
 
 		// 没有工具调用，流式输出最终响应
-		sendSSE(c, SSEEventStatus, map[string]any{
+		sendSSEActive(c, activity, SSEEventStatus, map[string]any{
 			"message":    "正在生成回答...",
 			"stage":      "generating",
 			"stage_ms":   modelElapsed,
@@ -2159,42 +3091,47 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 
 		// 流式调用模型
 		streamStart := time.Now()
-		err = h.streamFinalResponse(tid, messages, c)
+		assistantContent, err := h.streamFinalResponse(tid, messages, c, activity)
 		if err != nil {
 			log.Printf("Stream error: %v", err)
 			// 降级到非流式
-			sendSSE(c, SSEEventDelta, map[string]string{"content": response.Content})
+			assistantContent = response.Content
+			sendAssistantBufferedDelta(c, activity, response.Content)
 		}
+		saveConversationMessage(tid, uid, conversationID, "assistant", assistantContent)
 
 		// 发送完成事件（带总耗时）
 		sendSSE(c, SSEEventDone, map[string]any{
-			"total_ms":  time.Since(requestStart).Milliseconds(),
-			"stream_ms": time.Since(streamStart).Milliseconds(),
+			"total_ms":        time.Since(requestStart).Milliseconds(),
+			"stream_ms":       time.Since(streamStart).Milliseconds(),
+			"conversation_id": conversationID,
 		})
 
 		// 异步提取记忆（不阻塞响应）
 		if h.memoryExtractor != nil {
-			go h.extractMemoryFromConversation(tid, userID.(string), req.Messages, response.Content)
+			go h.extractMemoryFromConversation(tid, uid, req.Messages, assistantContent)
 		}
 		return
 	}
 
-	sendSSE(c, SSEEventDelta, map[string]string{"content": "抱歉，处理超时，请简化您的请求。"})
-	sendSSE(c, SSEEventDone, map[string]any{
-		"total_ms": time.Since(requestStart).Milliseconds(),
+	sendAssistantBufferedDelta(c, activity, "已达到连续工具调用步骤上限，请根据已返回结果拆分后继续。")
+	saveConversationMessage(tid, uid, conversationID, "assistant", "已达到连续工具调用步骤上限，请根据已返回结果拆分后继续。")
+	sendSSEActive(c, activity, SSEEventDone, map[string]any{
+		"total_ms":        time.Since(requestStart).Milliseconds(),
+		"conversation_id": conversationID,
 	})
 
 	// 超时场景也尝试提取记忆
 	if h.memoryExtractor != nil {
-		go h.extractMemoryFromConversation(tid, userID.(string), req.Messages, "")
+		go h.extractMemoryFromConversation(tid, uid, req.Messages, "")
 	}
 }
 
 // streamFinalResponse 流式输出最终响应
-func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservice.Message, c *gin.Context) error {
+func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservice.Message, c *gin.Context, activity *assistantActivityTracker) (string, error) {
 	config, err := h.modelService.GetConfigForTenant(tenantID, "")
 	if err != nil {
-		return fmt.Errorf("未配置可用的模型: %w", err)
+		return "", fmt.Errorf("未配置可用的模型: %w", err)
 	}
 
 	reqBody := map[string]any{
@@ -2210,15 +3147,28 @@ func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservi
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+config.APIKey)
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 0}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (status %d)", resp.StatusCode)
+		return "", fmt.Errorf("API error (status %d)", resp.StatusCode)
+	}
+
+	var fullContent strings.Builder
+	deltaBuffer := newAssistantDeltaBuffer(8, 32, 80*time.Millisecond)
+	sendDeltaChunks := func(chunks []string) {
+		for _, chunk := range chunks {
+			if chunk == "" {
+				continue
+			}
+			sendSSEActive(c, activity, SSEEventDelta, map[string]string{
+				"content": chunk,
+			})
+		}
 	}
 
 	// 解析SSE流
@@ -2232,7 +3182,8 @@ func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservi
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
-				return nil
+				sendDeltaChunks(deltaBuffer.push("", time.Now(), true))
+				return fullContent.String(), nil
 			}
 
 			var chunk struct {
@@ -2248,14 +3199,15 @@ func (h *ChatHandler) streamFinalResponse(tenantID string, messages []modelservi
 			}
 
 			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-				sendSSE(c, SSEEventDelta, map[string]string{
-					"content": chunk.Choices[0].Delta.Content,
-				})
+				piece := chunk.Choices[0].Delta.Content
+				fullContent.WriteString(piece)
+				sendDeltaChunks(deltaBuffer.push(piece, time.Now(), false))
 			}
 		}
 	}
+	sendDeltaChunks(deltaBuffer.push("", time.Now(), true))
 
-	return scanner.Err()
+	return fullContent.String(), scanner.Err()
 }
 
 // ModelResponse 模型响应
@@ -2341,11 +3293,7 @@ func (h *ChatHandler) callModelWithTools(tenantID string, messages []modelservic
 		}
 		resp.Body.Close()
 
-		// 调试：写原始字节到文件
-		os.WriteFile("/tmp/api response dump.bin", respBody, 0644)
-		log.Printf("Raw response first 20 bytes: %v", respBody[:min(20, len(respBody))])
-
-		// 先检查 BOM (必须在 gzip 检查之前)
+		// 清理可能导致 JSON 解析失败的 BOM / gzip 包装。
 		if len(respBody) >= 3 && respBody[0] == 0xEF && respBody[1] == 0xBB && respBody[2] == 0xBF {
 			log.Printf("BOM detected, stripping")
 			respBody = respBody[3:]

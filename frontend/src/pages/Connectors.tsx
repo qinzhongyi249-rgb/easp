@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider } from 'antd';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider, Switch, Alert } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Connector } from '../api/connector';
@@ -18,8 +18,9 @@ const Connectors: React.FC = () => {
   const [form] = Form.useForm();
   const isMobile = window.innerWidth < 768;
 
-  // 认证类型联动
+  // 认证/凭据类型联动
   const authType = Form.useWatch('auth_type', form);
+  const credentialMode = Form.useWatch('credential_mode', form);
 
   const load = async () => {
     if (!currentTenant) return;
@@ -50,9 +51,15 @@ const Connectors: React.FC = () => {
       if (authConfigStr) {
         try { authConfigStr = JSON.stringify(JSON.parse(authConfigStr), null, 2); } catch { /* keep raw */ }
       }
+      const credentialMode = record.credential_mode || (record.auth_type ? 'static' : 'none');
 
       form.setFieldsValue({
         ...record,
+        credential_mode: credentialMode,
+        auth_type: record.auth_type || 'none',
+        user_token_header: record.user_token_header || 'Authorization',
+        user_token_prefix: record.user_token_prefix ?? 'Bearer',
+        user_token_required_sso: record.user_token_required_sso ?? true,
         headers_kv: headersKV,
         auth_config_text: authConfigStr,
       });
@@ -62,6 +69,10 @@ const Connectors: React.FC = () => {
       form.setFieldsValue({
         type: 'mcp',
         auth_type: 'none',
+        credential_mode: 'static',
+        user_token_header: 'Authorization',
+        user_token_prefix: 'Bearer',
+        user_token_required_sso: true,
         transport_type: 'streamable_http',
         headers_kv: [{ key: '', value: '' }],
       });
@@ -83,7 +94,7 @@ const Connectors: React.FC = () => {
 
     // 解析 auth_config
     let authConfig = values.auth_config_text || null;
-    if (authConfig && authConfig.trim()) {
+    if (values.credential_mode === 'static' && authConfig && authConfig.trim()) {
       try { JSON.parse(authConfig); } catch { message.error('认证配置必须是合法JSON'); return; }
     }
 
@@ -94,8 +105,12 @@ const Connectors: React.FC = () => {
       transport_type: values.transport_type || undefined,
       mcp_server_url: values.mcp_server_url || undefined,
       headers: headersJSON || undefined,
-      auth_type: values.auth_type === 'none' ? undefined : values.auth_type,
-      auth_config: authConfig || undefined,
+      auth_type: values.credential_mode === 'static' && values.auth_type !== 'none' ? values.auth_type : undefined,
+      auth_config: values.credential_mode === 'static' && authConfig ? authConfig : undefined,
+      credential_mode: values.credential_mode || 'static',
+      user_token_header: values.user_token_header || undefined,
+      user_token_prefix: values.user_token_prefix ?? undefined,
+      user_token_required_sso: values.user_token_required_sso ?? true,
       status: 'active',
     };
 
@@ -162,7 +177,7 @@ const Connectors: React.FC = () => {
         width={isMobile ? '95%' : 600}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" initialValues={{ type: 'mcp', auth_type: 'none', transport_type: 'streamable_http', headers_kv: [{ key: '', value: '' }] }}>
+        <Form form={form} layout="vertical" initialValues={{ type: 'mcp', auth_type: 'none', credential_mode: 'static', user_token_header: 'Authorization', user_token_prefix: 'Bearer', user_token_required_sso: true, transport_type: 'streamable_http', headers_kv: [{ key: '', value: '' }] }}>
           {/* 基本信息 */}
           <Form.Item name="name" label="连接器名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如: GitHub MCP / 企业数据服务" />
@@ -221,19 +236,54 @@ const Connectors: React.FC = () => {
 
           <Divider style={{ margin: '16px 0 16px' }}>认证配置</Divider>
 
-          <Form.Item name="auth_type" label="认证类型">
+          <Form.Item name="credential_mode" label="凭据模式" tooltip="静态凭据使用连接器固定密钥；用户Token透传会使用当前SSO登录用户的业务Token；无认证不发送认证信息。">
             <Select options={[
+              { value: 'static', label: '静态凭据' },
+              { value: 'user_token', label: '透传当前 SSO 用户 Token' },
               { value: 'none', label: '无认证' },
-              { value: 'bearer', label: 'Bearer Token' },
-              { value: 'api_key', label: 'API Key' },
-              { value: 'basic', label: 'Basic Auth' },
             ]} />
           </Form.Item>
 
-          {authType && authType !== 'none' && (
-            <Form.Item name="auth_config_text" label="认证配置 (JSON)" tooltip='Bearer: {"token":"xxx"} | API Key: {"key":"xxx","header":"X-API-Key"} | Basic: {"username":"xxx","password":"xxx"}'>
-              <Input.TextArea rows={3} placeholder='{"token": "your-secret-token"}' style={{ fontFamily: 'monospace', fontSize: 13 }} />
-            </Form.Item>
+          {credentialMode === 'user_token' && (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="仅 SSO 登录用户可用"
+                description="调用 MCP/REST 工具时，后端会读取当前用户最近一次 SSO 登录保存的业务 Token 并动态注入请求头；无 Token 会明确失败。"
+              />
+              <div style={{ display: 'flex', gap: 16 }}>
+                <Form.Item name="user_token_header" label="Token Header" rules={[{ required: true, message: '请输入Header名称' }]} style={{ flex: 1 }}>
+                  <Input placeholder="Authorization" />
+                </Form.Item>
+                <Form.Item name="user_token_prefix" label="Token 前缀" tooltip="为空则直接写入Token；常用 Bearer / Token" style={{ flex: 1 }}>
+                  <Input placeholder="Bearer" />
+                </Form.Item>
+              </div>
+              <Form.Item name="user_token_required_sso" label="要求 SSO Token" valuePropName="checked" tooltip="开启后，无业务 SSO Token 时明确失败，不降级到静态凭据。">
+                <Switch checkedChildren="要求" unCheckedChildren="不要求" />
+              </Form.Item>
+            </>
+          )}
+
+          {credentialMode === 'static' && (
+            <>
+              <Form.Item name="auth_type" label="认证类型">
+                <Select options={[
+                  { value: 'none', label: '无认证' },
+                  { value: 'bearer', label: 'Bearer Token' },
+                  { value: 'api_key', label: 'API Key' },
+                  { value: 'basic', label: 'Basic Auth' },
+                ]} />
+              </Form.Item>
+
+              {authType && authType !== 'none' && (
+                <Form.Item name="auth_config_text" label="认证配置 (JSON)" tooltip='Bearer: {"token":"xxx"} | API Key: {"key":"xxx","header":"X-API-Key"} | Basic: {"username":"xxx","password":"xxx"}'>
+                  <Input.TextArea rows={3} placeholder='{"token": "your-secret-token"}' style={{ fontFamily: 'monospace', fontSize: 13 }} />
+                </Form.Item>
+              )}
+            </>
           )}
         </Form>
       </Modal>

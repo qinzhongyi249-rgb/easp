@@ -1,49 +1,111 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Typography, App, Tabs, Tag, Descriptions, Select, Switch, InputNumber, Space, Popconfirm, Dropdown } from 'antd';
-import { PlusOutlined, DatabaseOutlined, UserOutlined, ApartmentOutlined, BulbOutlined, BarChartOutlined, EditOutlined, DeleteOutlined, MoreOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Table, Button, Modal, Form, Input, Typography, App, Tabs, Tag, Descriptions, Select, Switch, InputNumber, Space, Popconfirm, Dropdown, Card, Row, Col, Statistic, Alert, Progress, Divider, Tooltip, Empty } from 'antd';
+import { PlusOutlined, DatabaseOutlined, UserOutlined, ApartmentOutlined, BulbOutlined, BarChartOutlined, EditOutlined, DeleteOutlined, MoreOutlined, SafetyCertificateOutlined, SearchOutlined, AuditOutlined, HddOutlined, SyncOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
-import type { MemoryPool, UserMemory, Entity, SkillMemory, MemoryStats } from '../api/memory';
+import type { MemoryPool, MemoryEntry, UserMemory, Entity, SkillMemory, MemoryStats, MemorySettings, MemoryAuditLog, MemoryScoreBreakdown } from '../api/memory';
 import { memoryApi } from '../api/memory';
+import { useAuth } from '../contexts/AuthContext';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 interface LayoutContext { currentTenant: string; }
+
+const fmtTime = (v?: string | null) => (v ? new Date(v).toLocaleString() : '-');
+const fmtScore = (v?: number) => Math.round((v || 0) * 100);
+
+const statusColor: Record<string, string> = {
+  active: 'green',
+  archived: 'orange',
+  deleted: 'red',
+};
+
+const actionColor: Record<string, string> = {
+  save: 'green',
+  sanitize: 'gold',
+  deduplicate: 'blue',
+  vector_index_failed: 'red',
+  vector_search_fallback: 'orange',
+  archive: 'purple',
+};
 
 const Memory: React.FC = () => {
   const { currentTenant } = useOutletContext<LayoutContext>();
+  const { user } = useAuth();
   const { message } = App.useApp();
   const [pools, setPools] = useState<MemoryPool[]>([]);
+  const [poolEntries, setPoolEntries] = useState<MemoryEntry[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [selectedPoolId, setSelectedPoolId] = useState<string>('');
   const [userMemories, setUserMemories] = useState<UserMemory[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [skillMemories, setSkillMemories] = useState<SkillMemory[]>([]);
   const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [settings, setSettings] = useState<MemorySettings | null>(null);
+  const [auditLogs, setAuditLogs] = useState<MemoryAuditLog[]>([]);
+  const [recallResults, setRecallResults] = useState<UserMemory[]>([]);
+  const [recallExplanations, setRecallExplanations] = useState<MemoryScoreBreakdown[]>([]);
+  const [recallQuery, setRecallQuery] = useState('');
+  const [recallUserId, setRecallUserId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPool, setEditingPool] = useState<MemoryPool | null>(null);
-  const [activeTab, setActiveTab] = useState('pools');
+  const [activeTab, setActiveTab] = useState('governance');
   const [form] = Form.useForm();
   const isMobile = window.innerWidth < 768;
 
-  const load = async () => {
+  const explanationMap = useMemo(() => {
+    const map = new Map<string, MemoryScoreBreakdown>();
+    recallExplanations.forEach((item) => map.set(item.memory_id, item));
+    return map;
+  }, [recallExplanations]);
+
+  const totalPoolTokens = useMemo(() => pools.reduce((sum, pool) => sum + (pool.max_tokens || 0), 0), [pools]);
+  const archivedCount = useMemo(() => userMemories.filter((item) => item.status === 'archived').length, [userMemories]);
+  const vectorIndexedCount = useMemo(() => userMemories.filter((item) => !!item.vector_indexed_at).length, [userMemories]);
+
+  const load = useCallback(async () => {
     if (!currentTenant) return;
     setLoading(true);
     try {
-      const [poolsRes, userRes, entityRes, skillRes, statsRes] = await Promise.all([
+      const [poolsRes, userRes, entityRes, skillRes, statsRes, settingsRes, auditRes] = await Promise.all([
         memoryApi.listPools(currentTenant),
-        memoryApi.listAllUserMemories(currentTenant),
+        memoryApi.listAllUserMemories(currentTenant, 100),
         memoryApi.listEntities(currentTenant),
         memoryApi.listSkillMemories(currentTenant),
         memoryApi.getStats(currentTenant),
+        memoryApi.getSettings(currentTenant),
+        memoryApi.listAuditLogs(currentTenant, 100),
       ]);
       setPools(poolsRes.data || []);
+      setSelectedPoolId((prev) => prev || poolsRes.data?.[0]?.id || '');
       setUserMemories(userRes.data?.memories || []);
       setEntities(entityRes.data?.entities || []);
       setSkillMemories(skillRes.data?.memories || []);
       setStats(statsRes.data || null);
+      setSettings(settingsRes.data || null);
+      setAuditLogs(auditRes.data?.logs || []);
     } catch { message.error('加载失败'); }
     finally { setLoading(false); }
-  };
+  }, [currentTenant, message]);
 
-  useEffect(() => { load(); }, [currentTenant]);
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!selectedPoolId) {
+      setPoolEntries([]);
+      return;
+    }
+    setEntriesLoading(true);
+    memoryApi.listEntries(selectedPoolId, 100)
+      .then((res) => setPoolEntries(res.data || []))
+      .catch(() => message.error('加载记忆池条目失败'))
+      .finally(() => setEntriesLoading(false));
+  }, [selectedPoolId, message]);
+
+  useEffect(() => {
+    if (!recallUserId && user?.id) setRecallUserId(user.id);
+  }, [recallUserId, user?.id]);
 
   const openPoolModal = useCallback((record?: MemoryPool) => {
     if (record) {
@@ -70,8 +132,7 @@ const Memory: React.FC = () => {
   const onPoolOk = async () => {
     const values = await form.validateFields();
     try {
-      // 解析 trigger_rules JSON
-      let triggerRules = values.trigger_rules || null;
+      const triggerRules = values.trigger_rules || null;
       if (triggerRules && triggerRules.trim()) {
         try { JSON.parse(triggerRules); } catch { message.error('触发规则必须是合法JSON'); return; }
       }
@@ -97,7 +158,41 @@ const Memory: React.FC = () => {
     catch { message.error('删除失败'); }
   };
 
-  // 记忆池列
+  const updateSetting = async (patch: Partial<MemorySettings>) => {
+    if (!currentTenant || !settings) return;
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    setSettingsSaving(true);
+    try {
+      const res = await memoryApi.updateSettings(currentTenant, patch);
+      setSettings(res.data);
+      message.success('配置已保存');
+    } catch {
+      setSettings(settings);
+      message.error('配置保存失败');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const runRecallDebug = async () => {
+    const uid = recallUserId.trim() || user?.id || '';
+    if (!uid) { message.warning('请输入用户ID'); return; }
+    if (!recallQuery.trim()) { message.warning('请输入检索问题'); return; }
+    setSearchLoading(true);
+    try {
+      const res = await memoryApi.searchUserMemories(currentTenant, uid, recallQuery.trim(), 10);
+      setRecallResults(res.data?.memories || []);
+      setRecallExplanations(res.data?.explanations || []);
+      message.success('召回完成');
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || '召回调试失败');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   const poolColumns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
     ...(!isMobile ? [
@@ -109,11 +204,11 @@ const Memory: React.FC = () => {
         const colorMap: Record<string, string> = { conversation: 'cyan', skill: 'orange', knowledge: 'gold' };
         return <Tag color={colorMap[v] || 'default'}>{v}</Tag>;
       }},
-      { title: '优先级', dataIndex: 'priority', key: 'priority', width: 60 },
-      { title: 'Token限制', dataIndex: 'max_tokens', key: 'max_tokens', width: 90, render: (v: number) => v === 0 ? '不限' : v },
-      { title: '自动激活', dataIndex: 'auto_activate', key: 'auto_activate', width: 80, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
-      { title: '记忆数', dataIndex: 'memory_count', key: 'memory_count', width: 70 },
-      { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 60, render: (v: boolean) => <Tag color={v ? 'green' : 'red'}>{v ? '启用' : '禁用'}</Tag> },
+      { title: '优先级', dataIndex: 'priority', key: 'priority', width: 70 },
+      { title: 'Token限制', dataIndex: 'max_tokens', key: 'max_tokens', width: 100, render: (v: number) => v === 0 ? '不限' : v },
+      { title: '自动激活', dataIndex: 'auto_activate', key: 'auto_activate', width: 90, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
+      { title: '记忆数', dataIndex: 'memory_count', key: 'memory_count', width: 80 },
+      { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 70, render: (v: boolean) => <Tag color={v ? 'green' : 'red'}>{v ? '启用' : '禁用'}</Tag> },
     ] : []),
     { title: '操作', key: 'action', width: isMobile ? 60 : 120, render: (_: unknown, record: MemoryPool) => (
       isMobile ? (
@@ -134,21 +229,55 @@ const Memory: React.FC = () => {
     )},
   ];
 
-  // 用户记忆列
   const userMemoryColumns = [
-    { title: '类型', dataIndex: 'type', key: 'type', width: 80, render: (v: string) => {
+    { title: '类型', dataIndex: 'type', key: 'type', width: 90, render: (v: string) => {
       const colorMap: Record<string, string> = { preference: 'blue', fact: 'green', feedback: 'orange' };
       return <Tag color={colorMap[v] || 'default'}>{v}</Tag>;
     }},
-    { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true },
+    { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true, render: (v: string) => <Tooltip title={v}>{v}</Tooltip> },
     ...(!isMobile ? [
-      { title: '用户ID', dataIndex: 'user_id', key: 'user_id', ellipsis: true, width: 120 },
-      { title: '访问次数', dataIndex: 'access_count', key: 'access_count', width: 80 },
+      { title: '用户ID', dataIndex: 'user_id', key: 'user_id', ellipsis: true, width: 130 },
+      { title: '来源', dataIndex: 'source', key: 'source', width: 90, render: (v: string) => v ? <Tag>{v}</Tag> : '-' },
+      { title: '状态', dataIndex: 'status', key: 'status', width: 90, render: (v: string) => <Tag color={statusColor[v] || 'default'}>{v || 'active'}</Tag> },
+      { title: '访问/出现', key: 'access', width: 100, render: (_: unknown, record: UserMemory) => `${record.access_count || 0}/${record.last_seen_at ? 1 : 0}` },
+      { title: '向量', dataIndex: 'vector_indexed_at', key: 'vector_indexed_at', width: 90, render: (v: string | null) => v ? <Tag color="green">已索引</Tag> : <Tag>未索引</Tag> },
     ] : []),
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: fmtTime },
   ];
 
-  // 实体列
+  const poolEntryColumns = [
+    { title: '类型', dataIndex: 'type', key: 'type', width: 100, render: (v: string) => <Tag>{v || 'fact'}</Tag> },
+    { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true, render: (v: string) => <Tooltip title={v}>{v}</Tooltip> },
+    ...(!isMobile ? [
+      { title: '敏感级别', dataIndex: 'sensitivity', key: 'sensitivity', width: 100, render: (v: string) => <Tag color={v === 'high' ? 'red' : v === 'medium' ? 'orange' : 'green'}>{v || 'low'}</Tag> },
+      { title: '记忆池ID', dataIndex: 'pool_id', key: 'pool_id', ellipsis: true, width: 160 },
+    ] : []),
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: fmtTime },
+  ];
+
+  const recallColumns = [
+    { title: '内容', dataIndex: 'content', key: 'content', ellipsis: true, render: (v: string) => <Tooltip title={v}>{v}</Tooltip> },
+    { title: '类型', dataIndex: 'type', key: 'type', width: 90, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '综合分', key: 'score', width: 120, render: (_: unknown, record: UserMemory) => {
+      const item = explanationMap.get(record.id);
+      return <Progress percent={fmtScore(item?.final_score)} size="small" />;
+    }},
+    ...(!isMobile ? [
+      { title: '评分拆解', key: 'breakdown', width: 260, render: (_: unknown, record: UserMemory) => {
+        const item = explanationMap.get(record.id);
+        if (!item) return '-';
+        return <Space size={4} wrap>
+          <Tag color="blue">关键词 {fmtScore(item.keyword_score)}</Tag>
+          <Tag color="purple">向量 {fmtScore(item.vector_score)}</Tag>
+          <Tag color="cyan">新鲜 {fmtScore(item.recency_score)}</Tag>
+          <Tag color="gold">频次 {fmtScore(item.frequency_score)}</Tag>
+          <Tag>类型 {fmtScore(item.type_score)}</Tag>
+        </Space>;
+      }},
+    ] : []),
+    { title: '解释', key: 'explanation', ellipsis: true, render: (_: unknown, record: UserMemory) => explanationMap.get(record.id)?.explanation || '-' },
+  ];
+
   const entityColumns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
     { title: '类型', dataIndex: 'type', key: 'type', width: 100, render: (v: string) => {
@@ -158,10 +287,9 @@ const Memory: React.FC = () => {
     ...(!isMobile ? [
       { title: '引用ID', dataIndex: 'ref_id', key: 'ref_id', ellipsis: true },
     ] : []),
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: fmtTime },
   ];
 
-  // 技能记忆列
   const skillMemoryColumns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
     ...(!isMobile ? [
@@ -169,10 +297,139 @@ const Memory: React.FC = () => {
       { title: '分类', dataIndex: 'category', key: 'category', width: 100, render: (v: string) => v ? <Tag>{v}</Tag> : '-' },
       { title: '使用次数', dataIndex: 'usage_count', key: 'usage_count', width: 80 },
     ] : []),
-    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: fmtTime },
   ];
 
+  const auditColumns = [
+    { title: '动作', dataIndex: 'action', key: 'action', width: 150, render: (v: string) => <Tag color={actionColor[v] || 'default'}>{v}</Tag> },
+    { title: '来源', dataIndex: 'source', key: 'source', width: 100, render: (v: string) => <Tag>{v || '-'}</Tag> },
+    ...(!isMobile ? [
+      { title: '用户ID', dataIndex: 'user_id', key: 'user_id', ellipsis: true, width: 130 },
+      { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true, render: (v: string) => v || '-' },
+      { title: '原始预览', dataIndex: 'original_preview', key: 'original_preview', ellipsis: true, render: (v: string) => v || '-' },
+      { title: '处理后预览', dataIndex: 'sanitized_preview', key: 'sanitized_preview', ellipsis: true, render: (v: string) => v || '-' },
+    ] : []),
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', render: fmtTime },
+  ];
+
+  const governanceView = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="记忆治理前端只做配置和展示"
+        description="敏感过滤、去重、混合检索、召回排序、容量归档仍由后端决策；页面用于开关配置、召回解释和审计验证。"
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={12} lg={6}><Card><Statistic title="用户记忆" value={stats?.total_user_memories || 0} prefix={<UserOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="向量已索引" value={vectorIndexedCount} prefix={<SyncOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="已归档" value={archivedCount} prefix={<HddOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="池 Token 上限" value={totalPoolTokens || 0} suffix={totalPoolTokens ? '' : '不限'} prefix={<DatabaseOutlined />} /></Card></Col>
+      </Row>
+      <Card title={<Space><SafetyCertificateOutlined />治理配置</Space>} loading={loading && !settings}>
+        {settings ? (
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical">
+                <Text strong>自动提取</Text>
+                <Switch checked={settings.auto_extract_enabled} loading={settingsSaving} onChange={(v) => updateSetting({ auto_extract_enabled: v })} />
+                <Text type="secondary">控制对话是否自动沉淀为长期记忆。</Text>
+              </Space>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical">
+                <Text strong>召回注入</Text>
+                <Switch checked={settings.recall_enabled} loading={settingsSaving} onChange={(v) => updateSetting({ recall_enabled: v })} />
+                <Text type="secondary">关闭后 AI 助手不会加载历史记忆。</Text>
+              </Space>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical">
+                <Text strong>敏感过滤</Text>
+                <Switch checked={settings.sensitive_filter_enabled} loading={settingsSaving} onChange={(v) => updateSetting({ sensitive_filter_enabled: v })} />
+                <Text type="secondary">只作用于保存、展示、召回注入链路。</Text>
+              </Space>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical">
+                <Text strong>审计日志</Text>
+                <Switch checked={settings.audit_enabled} loading={settingsSaving} onChange={(v) => updateSetting({ audit_enabled: v })} />
+                <Text type="secondary">记录脱敏、去重、归档和向量 fallback。</Text>
+              </Space>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical">
+                <Text strong>混合检索</Text>
+                <Switch checked={settings.hybrid_search_enabled} loading={settingsSaving} onChange={(v) => updateSetting({ hybrid_search_enabled: v })} />
+                <Text type="secondary">融合关键词、向量、新鲜度、频次和类型评分。</Text>
+              </Space>
+            </Col>
+            <Col xs={24} md={12} lg={8}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Text strong>检索模式</Text>
+                <Select
+                  value={settings.hybrid_search_mode}
+                  style={{ width: '100%' }}
+                  disabled={settingsSaving}
+                  onChange={(v) => updateSetting({ hybrid_search_mode: v })}
+                  options={[
+                    { value: 'keyword', label: '仅关键词' },
+                    { value: 'keyword+vector', label: '关键词 + 向量' },
+                    { value: 'vector', label: '仅向量' },
+                  ]}
+                />
+                <Text type="secondary">推荐生产使用“关键词 + 向量”。</Text>
+              </Space>
+            </Col>
+          </Row>
+        ) : <Empty description="暂无治理配置" />}
+      </Card>
+      <Card title={<Space><HddOutlined />容量与归档提示</Space>}>
+        <Table dataSource={pools} columns={[
+          { title: '记忆池', dataIndex: 'name', key: 'name' },
+          { title: '用途', dataIndex: 'purpose', key: 'purpose', render: (v: string) => <Tag>{v}</Tag> },
+          { title: '优先级', dataIndex: 'priority', key: 'priority', width: 90 },
+          { title: '记忆数', dataIndex: 'memory_count', key: 'memory_count', width: 90 },
+          { title: 'Token上限', dataIndex: 'max_tokens', key: 'max_tokens', width: 110, render: (v: number) => v === 0 ? '不限' : v },
+          { title: '归档策略', key: 'archive_hint', render: (_: unknown, record: MemoryPool) => record.max_tokens === 0 ? '不限容量，不主动归档' : '超限时保留高价值记忆，低分记忆归档' },
+        ]} rowKey="id" size={isMobile ? 'small' : 'middle'} pagination={false} scroll={isMobile ? { x: 620 } : undefined} />
+      </Card>
+    </Space>
+  );
+
+  const recallView = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card title={<Space><SearchOutlined />召回调试与解释</Space>}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
+          <Input value={recallUserId} onChange={(e) => setRecallUserId(e.target.value)} placeholder="用户ID，默认当前用户" style={{ width: isMobile ? '100%' : 260 }} />
+          <Input.Search
+            value={recallQuery}
+            onChange={(e) => setRecallQuery(e.target.value)}
+            onSearch={runRecallDebug}
+            placeholder="输入问题，查看后端召回排序与解释"
+            enterButton="调试召回"
+            loading={searchLoading}
+            style={{ width: isMobile ? '100%' : 520 }}
+          />
+        </Space>
+        <Divider />
+        <Table dataSource={recallResults} columns={recallColumns} rowKey="id" loading={searchLoading}
+          size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 760 } : undefined} />
+      </Card>
+    </Space>
+  );
+
   const tabItems = [
+    {
+      key: 'governance',
+      label: <span><SafetyCertificateOutlined /> 治理</span>,
+      children: governanceView,
+    },
+    {
+      key: 'recall',
+      label: <span><SearchOutlined /> 召回解释</span>,
+      children: recallView,
+    },
     {
       key: 'pools',
       label: <span><DatabaseOutlined /> 记忆池</span>,
@@ -184,8 +441,31 @@ const Memory: React.FC = () => {
             </Button>
           </div>
           <Table dataSource={pools} columns={poolColumns} rowKey="id" loading={loading}
-            size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 500 } : undefined} />
+            size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 640 } : undefined} />
         </>
+      ),
+    },
+    {
+      key: 'entries',
+      label: <span><DatabaseOutlined /> 池条目 {poolEntries.length > 0 && <Tag>{poolEntries.length}</Tag>}</span>,
+      children: (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="这里展示 AI 助手记忆池工具写入的记忆条目"
+            description="例如通过 AI 助手记住的“女儿喜欢玩水”会存入 memory_entries，并按记忆池归类展示。"
+          />
+          <Select
+            value={selectedPoolId || undefined}
+            onChange={setSelectedPoolId}
+            placeholder="选择记忆池"
+            style={{ width: isMobile ? '100%' : 360 }}
+            options={pools.map((pool) => ({ label: `${pool.name}（${pool.memory_count || 0}）`, value: pool.id }))}
+          />
+          <Table dataSource={poolEntries} columns={poolEntryColumns} rowKey="id" loading={entriesLoading}
+            size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 720 } : undefined} />
+        </Space>
       ),
     },
     {
@@ -193,7 +473,15 @@ const Memory: React.FC = () => {
       label: <span><UserOutlined /> 用户记忆 {stats && <Tag>{stats.total_user_memories}</Tag>}</span>,
       children: (
         <Table dataSource={userMemories} columns={userMemoryColumns} rowKey="id" loading={loading}
-          size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 400 } : undefined} />
+          size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 820 } : undefined} />
+      ),
+    },
+    {
+      key: 'audit',
+      label: <span><AuditOutlined /> 治理审计 {auditLogs.length > 0 && <Tag>{auditLogs.length}</Tag>}</span>,
+      children: (
+        <Table dataSource={auditLogs} columns={auditColumns} rowKey="id" loading={loading}
+          size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 820 } : undefined} />
       ),
     },
     {
@@ -221,6 +509,7 @@ const Memory: React.FC = () => {
           <Descriptions.Item label="会话记忆">{stats.total_session_memories}</Descriptions.Item>
           <Descriptions.Item label="实体">{stats.total_entities}</Descriptions.Item>
           <Descriptions.Item label="技能记忆">{stats.total_skill_memories}</Descriptions.Item>
+          <Descriptions.Item label="按类型">{Object.entries(stats.by_type || {}).map(([k, v]) => <Tag key={k}>{k}: {v}</Tag>)}</Descriptions.Item>
         </Descriptions>
       ) : <Text type="secondary">暂无统计数据</Text>,
     },
@@ -230,15 +519,17 @@ const Memory: React.FC = () => {
     <div>
       <div style={{ marginBottom: 16 }}>
         <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><DatabaseOutlined /> 记忆管理</Title>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          管理记忆池、长期记忆、治理配置、召回解释和审计日志。
+        </Paragraph>
       </div>
 
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
 
-      {/* 记忆池编辑弹窗 */}
-      <Modal 
-        title={editingPool ? '编辑记忆池' : '新建记忆池'} 
-        open={modalOpen} 
-        onOk={onPoolOk} 
+      <Modal
+        title={editingPool ? '编辑记忆池' : '新建记忆池'}
+        open={modalOpen}
+        onOk={onPoolOk}
         onCancel={() => setModalOpen(false)}
         width={isMobile ? '95%' : 600}
         destroyOnClose

@@ -8,6 +8,7 @@ import (
 	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/vectordb"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // VectorMemoryService 向量记忆服务
@@ -19,7 +20,7 @@ type VectorMemoryService struct {
 
 // VectorMemoryConfig 向量记忆配置
 type VectorMemoryConfig struct {
-	BridgeURL  string `json:"bridge_url"`  // 桥接服务地址
+	BridgeURL  string `json:"bridge_url"` // 桥接服务地址
 	Database   string `json:"database"`
 	Collection string `json:"collection"`
 	Dimension  int    `json:"dimension"` // 保留但不再用于生成向量，仅兼容
@@ -52,6 +53,12 @@ type VectorMemory struct {
 	Sensitivity string                 `json:"sensitivity" db:"sensitivity"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 	CreatedAt   time.Time              `json:"created_at" db:"created_at"`
+}
+
+// VectorMemorySearchResult preserves vector similarity scores returned by the bridge.
+type VectorMemorySearchResult struct {
+	Memory VectorMemory `json:"memory"`
+	Score  float64      `json:"score"`
 }
 
 // Init 初始化
@@ -107,7 +114,19 @@ func (s *VectorMemoryService) SaveMemory(memory VectorMemory) error {
 
 // SearchMemories 搜索相似记忆 - 直接传查询文本，向量数据库自动 Embedding
 func (s *VectorMemoryService) SearchMemories(tenantID, poolID, query string, limit int) ([]VectorMemory, error) {
-	// 构建过滤条件
+	results, err := s.SearchMemoriesWithScores(tenantID, poolID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	memories := make([]VectorMemory, 0, len(results))
+	for _, result := range results {
+		memories = append(memories, result.Memory)
+	}
+	return memories, nil
+}
+
+// SearchMemoriesWithScores searches similar memories and keeps bridge similarity scores.
+func (s *VectorMemoryService) SearchMemoriesWithScores(tenantID, poolID, queryText string, limit int) ([]VectorMemorySearchResult, error) {
 	filters := map[string]string{
 		"tenant_id": tenantID,
 	}
@@ -115,31 +134,40 @@ func (s *VectorMemoryService) SearchMemories(tenantID, poolID, query string, lim
 		filters["pool_id"] = poolID
 	}
 
-	// 文本搜索：向量数据库自动 Embedding 后搜索
-	results, err := s.vectorDB.SearchByText(s.database, s.collection, query, limit, filters)
+	results, err := s.vectorDB.SearchByText(s.database, s.collection, queryText, limit, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
 
-	// 转换结果 - 从MySQL获取完整数据
-	memories := make([]VectorMemory, 0, len(results))
+	memories := make([]VectorMemorySearchResult, 0, len(results))
 	ids := make([]string, 0, len(results))
+	scores := map[string]float64{}
 	for _, r := range results {
 		ids = append(ids, r.ID)
+		scores[r.ID] = r.Score
 	}
 
-	if len(ids) > 0 {
-		// 从MySQL获取完整数据
-		query := "SELECT id, tenant_id, pool_id, content, type, sensitivity, created_at FROM memory_vectors WHERE id IN (?)"
-		args := make([]interface{}, len(ids))
-		for i, id := range ids {
-			args[i] = id
-		}
+	if len(ids) == 0 {
+		return memories, nil
+	}
 
-		var dbMemories []VectorMemory
-		err = database.DB.Select(&dbMemories, query, args...)
-		if err == nil {
-			memories = dbMemories
+	query, args, err := sqlx.In("SELECT id, tenant_id, pool_id, content, type, sensitivity, created_at FROM memory_vectors WHERE id IN (?)", ids)
+	if err != nil {
+		return nil, err
+	}
+	query = database.DB.Rebind(query)
+
+	var dbMemories []VectorMemory
+	if err := database.DB.Select(&dbMemories, query, args...); err != nil {
+		return memories, nil
+	}
+	byID := map[string]VectorMemory{}
+	for _, mem := range dbMemories {
+		byID[mem.ID] = mem
+	}
+	for _, id := range ids {
+		if mem, ok := byID[id]; ok {
+			memories = append(memories, VectorMemorySearchResult{Memory: mem, Score: scores[id]})
 		}
 	}
 

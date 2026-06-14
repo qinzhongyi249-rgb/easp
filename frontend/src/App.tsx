@@ -1,24 +1,27 @@
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntdApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import MainLayout from './layouts/MainLayout';
-import Login from './pages/Login';
-import TenantLogin from './pages/TenantLogin';
-import Dashboard from './pages/Dashboard';
-import Tenants from './pages/Tenants';
-import Users from './pages/Users';
-import Roles from './pages/Roles';
-import Connectors from './pages/Connectors';
-import MCPTools from './pages/MCPTools';
-import Skills from './pages/Skills';
-import Memory from './pages/Memory';
-import ModelConfig from './pages/ModelConfig';
-import AuditLogs from './pages/AuditLogs';
-import APIKeys from './pages/APIKeys';
-import SSOConfig from './pages/SSOConfig';
-import Assistant from './pages/Assistant';
-import UsageAnalytics from './pages/UsageAnalytics';
+
+const Login = lazy(() => import('./pages/Login'));
+const TenantLogin = lazy(() => import('./pages/TenantLogin'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Tenants = lazy(() => import('./pages/Tenants'));
+const Users = lazy(() => import('./pages/Users'));
+const Roles = lazy(() => import('./pages/Roles'));
+const Connectors = lazy(() => import('./pages/Connectors'));
+const MCPTools = lazy(() => import('./pages/MCPTools'));
+const Skills = lazy(() => import('./pages/Skills'));
+const Memory = lazy(() => import('./pages/Memory'));
+const ModelConfig = lazy(() => import('./pages/ModelConfig'));
+const AuditLogs = lazy(() => import('./pages/AuditLogs'));
+const APIKeys = lazy(() => import('./pages/APIKeys'));
+const ApiKeyAccessDoc = lazy(() => import('./pages/ApiKeyAccessDoc'));
+const SSOConfig = lazy(() => import('./pages/SSOConfig'));
+const Assistant = lazy(() => import('./pages/Assistant'));
+const UsageAnalytics = lazy(() => import('./pages/UsageAnalytics'));
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
@@ -31,28 +34,31 @@ const AppRoutes = () => {
   if (loading) return null;
 
   return (
-    <Routes>
-      <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
-      <Route path="/sso/:tenantId" element={<TenantLogin />} />
-      <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="tenants" element={<Tenants />} />
-        <Route path="users" element={<Users />} />
-        <Route path="roles" element={<Roles />} />
-        <Route path="connectors" element={<Connectors />} />
-        <Route path="mcp-tools" element={<MCPTools />} />
-        <Route path="skills" element={<Skills />} />
-        <Route path="memory" element={<Memory />} />
-        <Route path="model-config" element={<ModelConfig />} />
-        <Route path="audit-logs" element={<AuditLogs />} />
-        <Route path="api-keys" element={<APIKeys />} />
-        <Route path="sso-config" element={<SSOConfig />} />
-        <Route path="assistant" element={<Assistant />} />
-        <Route path="usage-analytics" element={<UsageAnalytics />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
-    </Routes>
+    <Suspense fallback={null}>
+      <Routes>
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/sso/:tenantId" element={<TenantLogin />} />
+        <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
+        <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="tenants" element={<Tenants />} />
+          <Route path="users" element={<Users />} />
+          <Route path="roles" element={<Roles />} />
+          <Route path="connectors" element={<Connectors />} />
+          <Route path="mcp-tools" element={<MCPTools />} />
+          <Route path="skills" element={<Skills />} />
+          <Route path="memory" element={<Memory />} />
+          <Route path="model-config" element={<ModelConfig />} />
+          <Route path="audit-logs" element={<AuditLogs />} />
+          <Route path="api-keys" element={<APIKeys />} />
+          <Route path="sso-config" element={<SSOConfig />} />
+          <Route path="assistant" element={<Assistant />} />
+          <Route path="usage-analytics" element={<UsageAnalytics />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    </Suspense>
   );
 };
 

@@ -74,7 +74,7 @@ const TenantLogin: React.FC = () => {
   };
 
   // 注册
-  const onRegister = async (values: { email: string; password: string; display_name?: string }) => {
+  const onRegister = async (values: { email?: string; phone?: string; password: string; display_name?: string }) => {
     setLoading(true);
     try {
       await authApi.register({ ...values, tenant_id: tenantId! });
@@ -134,8 +134,8 @@ const TenantLogin: React.FC = () => {
             label: '登录',
             children: (
               <Form form={loginForm} onFinish={onLogin} size="large">
-                <Form.Item name="username" rules={[{ required: true, message: '请输入邮箱' }]}>
-                  <Input prefix={<UserOutlined />} placeholder="邮箱" />
+                <Form.Item name="username" rules={[{ required: true, message: '请输入邮箱或手机号' }]}>
+                  <Input prefix={<UserOutlined />} placeholder="邮箱 / 手机号" />
                 </Form.Item>
                 <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
                   <Input.Password prefix={<LockOutlined />} placeholder="密码" />
@@ -154,8 +154,11 @@ const TenantLogin: React.FC = () => {
                 <Form.Item name="tenant_id" label="所属租户">
                   <Input disabled />
                 </Form.Item>
-                <Form.Item name="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+                <Form.Item name="email" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
                   <Input prefix={<UserOutlined />} placeholder="邮箱" />
+                </Form.Item>
+                <Form.Item name="phone">
+                  <Input placeholder="手机号（邮箱或手机号至少填一个）" />
                 </Form.Item>
                 <Form.Item name="display_name">
                   <Input placeholder="显示名称（可选）" />

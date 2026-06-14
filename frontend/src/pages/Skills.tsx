@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm, Empty } from 'antd';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm, Empty, Alert } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BulbOutlined, PlayCircleOutlined, MoreOutlined, HistoryOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Skill, SkillExecution, StepResult, JsonSchema } from '../api/skill';
@@ -9,6 +9,49 @@ import StepEditor from '../components/StepEditor';
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 interface LayoutContext { currentTenant: string; }
+
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  draft: { label: '草稿', color: 'blue' },
+  testing: { label: '测试中', color: 'gold' },
+  published: { label: '已发布', color: 'green' },
+  disabled: { label: '已停用', color: 'default' },
+  active: { label: '已发布(旧)', color: 'green' },
+  archived: { label: '已停用(旧)', color: 'default' },
+};
+
+const EXECUTION_MODE_META: Record<string, { label: string; color: string }> = {
+  dry_run: { label: '预演', color: 'purple' },
+  sandbox: { label: '沙箱', color: 'blue' },
+  production: { label: '正式', color: 'red' },
+};
+
+const normalizeStatus = (status?: string) => {
+  if (status === 'active') return 'published';
+  if (status === 'archived') return 'disabled';
+  return status || 'draft';
+};
+
+const renderStatusTag = (status?: string) => {
+  const meta = STATUS_META[status || ''] || { label: status || '草稿', color: 'default' };
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+};
+
+const renderExecutionModeTag = (mode?: string) => {
+  const normalized = mode || 'sandbox';
+  const meta = EXECUTION_MODE_META[normalized] || { label: normalized, color: 'default' };
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+};
+
+interface SkillFilters {
+  keyword: string;
+  status?: string;
+  category?: string;
+  hasInputSchema?: boolean;
+  hasTriggers?: boolean;
+  usageState?: 'used' | 'unused';
+}
+
+const normalizeText = (value?: string | null) => (value || '').toLowerCase();
 
 // 解析 JSON Schema 生成表单字段
 const parseInputSchema = (schemaStr?: string): { fields: Array<{ name: string; type: string; title: string; description?: string; required: boolean; defaultValue?: unknown }>; required: string[] } => {
@@ -90,6 +133,7 @@ const Skills: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Skill | null>(null);
+  const [filters, setFilters] = useState<SkillFilters>({ keyword: '' });
   const [form] = Form.useForm();
   const isMobile = window.innerWidth < 768;
 
@@ -212,7 +256,7 @@ const Skills: React.FC = () => {
     execForm.resetFields();
     // 根据 input_schema 设置默认值
     const { fields } = parseInputSchema(skill.input_schema);
-    const defaults: Record<string, unknown> = {};
+    const defaults: Record<string, unknown> = { execution_mode: 'sandbox' };
     fields.forEach(f => { if (f.defaultValue !== undefined) defaults[f.name] = f.defaultValue; });
     execForm.setFieldsValue(defaults);
     setExecModalOpen(true);
@@ -221,10 +265,11 @@ const Skills: React.FC = () => {
   const onExecute = async () => {
     if (!executingSkill) return;
     const values = await execForm.validateFields();
+    const { execution_mode = 'sandbox', ...inputs } = values;
     setExecuting(true);
     setExecutionResult(null);
     try {
-      const res = await skillApi.execute(currentTenant, executingSkill.id, values);
+      const res = await skillApi.execute(currentTenant, executingSkill.id, inputs, execution_mode);
       setExecutionResult(res.data);
       if (isFailedStatus(res.data?.status)) {
         message.error(res.data?.error || '执行失败');
@@ -259,6 +304,36 @@ const Skills: React.FC = () => {
   };
 
   // ========== 表格列定义 ==========
+  const filteredSkills = useMemo(() => {
+    const keyword = normalizeText(filters.keyword).trim();
+    return skills.filter((skill) => {
+      if (keyword) {
+        const haystack = [skill.name, skill.description, skill.version, skill.tags]
+          .map(normalizeText)
+          .join(' ');
+        if (!haystack.includes(keyword)) return false;
+      }
+      if (filters.status && skill.status !== filters.status) return false;
+      if (filters.category && skill.category !== filters.category) return false;
+      if (filters.hasInputSchema !== undefined) {
+        const hasSchema = Boolean(skill.input_schema && skill.input_schema.trim());
+        if (hasSchema !== filters.hasInputSchema) return false;
+      }
+      if (filters.hasTriggers !== undefined) {
+        const hasTriggers = Boolean(skill.triggers && skill.triggers.trim());
+        if (hasTriggers !== filters.hasTriggers) return false;
+      }
+      if (filters.usageState === 'used' && (skill.usage_count || 0) <= 0) return false;
+      if (filters.usageState === 'unused' && (skill.usage_count || 0) > 0) return false;
+      return true;
+    });
+  }, [filters, skills]);
+
+  const hasActiveFilters = Boolean(
+    filters.keyword || filters.status || filters.category || filters.hasInputSchema !== undefined ||
+    filters.hasTriggers !== undefined || filters.usageState
+  );
+
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, r: Skill) => (
       <Space>
@@ -272,8 +347,7 @@ const Skills: React.FC = () => {
       { title: '使用次数', dataIndex: 'usage_count', key: 'usage_count', width: 80 },
     ] : []),
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => {
-      const colorMap: Record<string, string> = { active: 'green', draft: 'blue', archived: 'default' };
-      return <Tag color={colorMap[v] || 'default'}>{v}</Tag>;
+      return renderStatusTag(v);
     }},
     { title: '操作', key: 'action', width: isMobile ? 60 : 280, render: (_: unknown, record: Skill) => (
       isMobile ? (
@@ -341,6 +415,9 @@ const Skills: React.FC = () => {
     return (
       <Card size="small" style={{ marginTop: 16 }}>
         <Descriptions column={2} size="small" bordered>
+          <Descriptions.Item label="执行模式">
+            {renderExecutionModeTag(result.execution_mode)}
+          </Descriptions.Item>
           <Descriptions.Item label="状态">
             <Tag color={isSuccessStatus(result.status) ? 'green' : isFailedStatus(result.status) ? 'red' : 'blue'}>
               {result.status}
@@ -400,7 +477,77 @@ const Skills: React.FC = () => {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditModal()}>新建技能</Button>
       </div>
 
-      <Table dataSource={skills} columns={columns} rowKey="id" loading={loading}
+      <div style={{ marginBottom: 16, padding: 12, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+        <Space wrap size="middle" style={{ width: '100%' }}>
+          <Input.Search
+            allowClear
+            placeholder="搜索名称/描述/版本/标签"
+            style={{ width: isMobile ? '100%' : 260 }}
+            value={filters.keyword}
+            onChange={(e) => setFilters(prev => ({ ...prev, keyword: e.target.value }))}
+          />
+          <Select
+            allowClear
+            placeholder="生命周期"
+            style={{ width: 130 }}
+            value={filters.status}
+            onChange={(value) => setFilters(prev => ({ ...prev, status: value }))}
+            options={[
+              { value: 'draft', label: '草稿' },
+              { value: 'testing', label: '测试中' },
+              { value: 'published', label: '已发布' },
+              { value: 'disabled', label: '已停用' },
+              { value: 'active', label: '已发布(旧)' },
+              { value: 'archived', label: '已停用(旧)' },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="分类"
+            style={{ width: 140 }}
+            value={filters.category}
+            onChange={(value) => setFilters(prev => ({ ...prev, category: value }))}
+            options={SKILL_CATEGORIES}
+          />
+          <Select
+            allowClear
+            placeholder="输入参数"
+            style={{ width: 130 }}
+            value={filters.hasInputSchema}
+            onChange={(value) => setFilters(prev => ({ ...prev, hasInputSchema: value }))}
+            options={[
+              { value: true, label: '有输入参数' },
+              { value: false, label: '无输入参数' },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="触发条件"
+            style={{ width: 130 }}
+            value={filters.hasTriggers}
+            onChange={(value) => setFilters(prev => ({ ...prev, hasTriggers: value }))}
+            options={[
+              { value: true, label: '有触发条件' },
+              { value: false, label: '无触发条件' },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="使用情况"
+            style={{ width: 120 }}
+            value={filters.usageState}
+            onChange={(value) => setFilters(prev => ({ ...prev, usageState: value }))}
+            options={[
+              { value: 'used', label: '已使用' },
+              { value: 'unused', label: '未使用' },
+            ]}
+          />
+          <Button disabled={!hasActiveFilters} onClick={() => setFilters({ keyword: '' })}>重置</Button>
+          <Text type="secondary">共 {filteredSkills.length} / {skills.length} 个</Text>
+        </Space>
+      </div>
+
+      <Table dataSource={filteredSkills} columns={columns} rowKey="id" loading={loading}
         size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 400 } : undefined} />
 
       {/* ========== 编辑/新建技能弹窗 ========== */}
@@ -429,8 +576,9 @@ const Skills: React.FC = () => {
                     <Form.Item name="status" label="状态" style={{ flex: 1 }}>
                       <Select options={[
                         { value: 'draft', label: '草稿' },
-                        { value: 'active', label: '启用' },
-                        { value: 'archived', label: '归档' },
+                        { value: 'testing', label: '测试中' },
+                        { value: 'published', label: '已发布' },
+                        { value: 'disabled', label: '已停用' },
                       ]} />
                     </Form.Item>
                   </div>
@@ -502,17 +650,40 @@ const Skills: React.FC = () => {
             {executingSkill.description && <Paragraph type="secondary" style={{ marginBottom: 16 }}>{executingSkill.description}</Paragraph>}
 
             {/* 输入表单 */}
-            {(() => {
+            <Space style={{ marginBottom: 12 }}>
+              <Text type="secondary">当前状态</Text>
+              {renderStatusTag(executingSkill.status)}
+            </Space>
+            {normalizeStatus(executingSkill.status) !== 'published' && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="未发布技能只能沙箱/预演测试；正式执行需要先发布。"
+              />
+            )}
+
+            <Form form={execForm} layout="vertical">
+              <Form.Item
+                name="execution_mode"
+                label="执行模式"
+                tooltip="默认沙箱，不触发外部副作用；正式执行仅允许已发布技能。"
+                rules={[{ required: true, message: '请选择执行模式' }]}
+              >
+                <Select options={[
+                  { value: 'sandbox', label: '沙箱测试（默认，不触发外部副作用）' },
+                  { value: 'dry_run', label: '预演（只校验流程，不触发外部副作用）' },
+                  { value: 'production', label: '正式执行（仅已发布技能）', disabled: normalizeStatus(executingSkill.status) !== 'published' },
+                ]} />
+              </Form.Item>
+              {(() => {
               const { fields } = parseInputSchema(executingSkill.input_schema);
               if (fields.length === 0) {
                 return <Text type="secondary">该技能无需输入参数</Text>;
               }
-              return (
-                <Form form={execForm} layout="vertical">
-                  {fields.map(f => renderInputField(f))}
-                </Form>
-              );
-            })()}
+              return fields.map(f => renderInputField(f));
+              })()}
+            </Form>
 
             <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
               <Button type="primary" icon={<PlayCircleOutlined />} loading={executing} onClick={onExecute}>
@@ -533,6 +704,7 @@ const Skills: React.FC = () => {
         <Table dataSource={Array.isArray(executions) ? executions : []} loading={historyLoading} rowKey="id" size="small" pagination={{ pageSize: 10 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
           columns={[
+            { title: '模式', dataIndex: 'execution_mode', key: 'execution_mode', width: 90, render: (v: string) => renderExecutionModeTag(v) },
             { title: '状态', dataIndex: 'status', key: 'status', width: 80, render: (v: string) => (
               <Tag color={isSuccessStatus(v) ? 'green' : isFailedStatus(v) ? 'red' : 'blue'}>{v}</Tag>
             )},

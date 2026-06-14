@@ -143,6 +143,15 @@ func (p *MCPProxy) CallTool(ctx context.Context, req ToolCallRequest) (*ToolCall
 
 // executeTool 执行工具调用
 func (p *MCPProxy) executeTool(ctx context.Context, req ToolCallRequest) (*ToolCallResponse, error) {
+	// 内置治理工具由 EASP 后端直接执行，不走外部 REST/MCP 代理。
+	if IsBuiltinGovernanceTool(req.Tool) {
+		data, err := ExecuteBuiltinGovernanceTool(ctx, req.Connector.TenantID, req.Tool, req.Arguments)
+		if err != nil {
+			return &ToolCallResponse{Success: false, Error: err.Error()}, nil
+		}
+		return &ToolCallResponse{Success: true, Data: data}, nil
+	}
+
 	// 如果连接器配置了MCP Server URL，走MCP协议调用
 	if req.Connector.MCPServerURL != nil && *req.Connector.MCPServerURL != "" {
 		return p.executeMCPTool(ctx, req)
@@ -196,8 +205,20 @@ func (p *MCPProxy) executeTool(ctx context.Context, req ToolCallRequest) (*ToolC
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	// 添加认证信息
-	if req.Connector.AuthType != nil && req.Connector.AuthConfig != nil {
-		addAuthHeader(httpReq, *req.Connector.AuthType, *req.Connector.AuthConfig)
+	runtimeConnector, err := BuildConnectorRuntimeAuth(ctx, req.Connector)
+	if err != nil {
+		return nil, err
+	}
+	if runtimeConnector.AuthType != nil && runtimeConnector.AuthConfig != nil {
+		addAuthHeader(httpReq, *runtimeConnector.AuthType, *runtimeConnector.AuthConfig)
+	}
+	if runtimeConnector.Headers != nil && *runtimeConnector.Headers != "" {
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(*runtimeConnector.Headers), &headers); err == nil {
+			for k, v := range headers {
+				httpReq.Header.Set(k, v)
+			}
+		}
 	}
 
 	// 发送请求
@@ -278,7 +299,11 @@ func (p *MCPProxy) callToolSSE(ctx context.Context, serverURL, toolName string, 
 	endpointCh := make(chan string, 1)
 
 	// 启动SSE连接
-	go p.mcpClient.connectSSEAndRead(ctx, serverURL, connector.AuthType, connector.AuthConfig, connector.Headers, endpointCh, respCh)
+	runtimeConnector, err := BuildConnectorRuntimeAuth(ctx, connector)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: err.Error(), Latency: time.Since(start).Milliseconds()}, nil
+	}
+	go p.mcpClient.connectSSEAndRead(ctx, serverURL, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers, endpointCh, respCh)
 
 	// 等待获取endpoint
 	var endpointURL string
@@ -296,7 +321,7 @@ func (p *MCPProxy) callToolSSE(ctx context.Context, serverURL, toolName string, 
 		"protocolVersion": JSONRPCVersion,
 		"capabilities":    map[string]interface{}{},
 		"clientInfo":      map[string]interface{}{"name": "easp-proxy", "version": "1.0.0"},
-	}, connector.AuthType, connector.AuthConfig, connector.Headers, respCh)
+	}, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers, respCh)
 	if err != nil {
 		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("initialize failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
 	}
@@ -305,13 +330,13 @@ func (p *MCPProxy) callToolSSE(ctx context.Context, serverURL, toolName string, 
 	}
 
 	// 发送 initialized 通知
-	p.mcpClient.sendNotify(ctx, endpointURL, "notifications/initialized", nil, connector.AuthType, connector.AuthConfig, connector.Headers)
+	p.mcpClient.sendNotify(ctx, endpointURL, "notifications/initialized", nil, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers)
 
 	// 调用工具
 	callResp, err := p.mcpClient.sendAndWaitSSE(ctx, endpointURL, "tools/call", map[string]interface{}{
 		"name":      toolName,
 		"arguments": args,
-	}, connector.AuthType, connector.AuthConfig, connector.Headers, respCh)
+	}, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers, respCh)
 	if err != nil {
 		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
 	}
@@ -327,11 +352,15 @@ func (p *MCPProxy) callToolStreamableHTTP(ctx context.Context, serverURL, toolNa
 	start := time.Now()
 
 	// initialize
-	_, err := p.mcpClient.httpDoRPC(ctx, serverURL, "initialize", map[string]interface{}{
+	runtimeConnector, err := BuildConnectorRuntimeAuth(ctx, connector)
+	if err != nil {
+		return &ToolCallResponse{Success: false, Error: err.Error(), Latency: time.Since(start).Milliseconds()}, nil
+	}
+	_, err = p.mcpClient.httpDoRPC(ctx, serverURL, "initialize", map[string]interface{}{
 		"protocolVersion": JSONRPCVersion,
 		"capabilities":    map[string]interface{}{},
 		"clientInfo":      map[string]interface{}{"name": "easp-proxy", "version": "1.0.0"},
-	}, connector.AuthType, connector.AuthConfig, connector.Headers)
+	}, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers)
 	if err != nil {
 		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("initialize failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
 	}
@@ -340,7 +369,7 @@ func (p *MCPProxy) callToolStreamableHTTP(ctx context.Context, serverURL, toolNa
 	callResp, err := p.mcpClient.httpDoRPC(ctx, serverURL, "tools/call", map[string]interface{}{
 		"name":      toolName,
 		"arguments": args,
-	}, connector.AuthType, connector.AuthConfig, connector.Headers)
+	}, runtimeConnector.AuthType, runtimeConnector.AuthConfig, runtimeConnector.Headers)
 	if err != nil {
 		return &ToolCallResponse{Success: false, Error: fmt.Sprintf("tools/call failed: %v", err), Latency: time.Since(start).Milliseconds()}, nil
 	}

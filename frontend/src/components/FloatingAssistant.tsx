@@ -7,6 +7,12 @@ import {
   ToolOutlined, BranchesOutlined, DownOutlined,
 } from '@ant-design/icons';
 import { MarkdownRenderer, MARKDOWN_CSS } from '../utils/markdown';
+import {
+  buildAssistantPageContext,
+  clearAssistantConversationId,
+  loadAssistantConversationId,
+  saveAssistantConversationId,
+} from '../utils/assistantContext';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -59,6 +65,36 @@ const stageConfig: Record<string, { icon: React.ReactNode; color: string; label:
   plan: { icon: <BranchesOutlined />, color: '#722ed1', label: '工具规划' },
   tool_calling: { icon: <ToolOutlined />, color: '#fa8c16', label: '执行工具' },
   generating: { icon: <ThunderboltOutlined />, color: '#52c41a', label: '生成回答' },
+};
+
+const TYPEWRITER_FRAME_MS = 24;
+const TYPEWRITER_CHARS_PER_FRAME = 3;
+
+const appendAssistantStreamingMessage = (
+  updater: React.Dispatch<React.SetStateAction<DisplayMessage[]>>,
+  content: string,
+  modelInfo?: ModelInfo | null,
+  traceSteps: TraceStep[] = [],
+  toolResults: ToolResult[] = [],
+) => {
+  updater(prev => {
+    const nextMsg: DisplayMessage = {
+      role: 'assistant',
+      content,
+      isStreaming: true,
+      modelInfo: modelInfo || undefined,
+      trace: traceSteps.length > 0 ? traceSteps : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+    };
+    const filtered = prev.filter(m => !(m.role === 'status' && m.isStreaming));
+    const streamingIndex = filtered.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
+    if (streamingIndex >= 0) {
+      const newMsgs = [...filtered];
+      newMsgs[streamingIndex] = { ...newMsgs[streamingIndex], ...nextMsg };
+      return newMsgs;
+    }
+    return [...filtered, nextMsg];
+  });
 };
 
 const TraceTimeline: React.FC<{
@@ -361,19 +397,20 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
     abortControllerRef.current = controller;
 
     try {
-      const history = messages
-        .filter(m => m.role === 'user' || (m.role === 'assistant' && !m.isStreaming))
-        .map(m => ({ role: m.role === 'status' ? 'assistant' : m.role, content: m.content }));
-      history.push({ role: 'user', content: text });
-
       const token = localStorage.getItem('access_token');
+      const conversationId = loadAssistantConversationId('floating_assistant', userId, tenantId);
       const response = await fetch(`/api/v1/tenants/${tenantId}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({
+          conversation_id: conversationId || undefined,
+          page_context: buildAssistantPageContext('floating_assistant', tenantId, userId),
+          // 服务端会按 conversation_id 拼接历史；前端只传本轮输入，避免历史重复注入。
+          messages: [{ role: 'user', content: text }],
+        }),
         signal: controller.signal,
       });
 
@@ -385,20 +422,60 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = '';
-      let currentContent = '';
       let traceSteps: TraceStep[] = [];
       let toolResults: ToolResult[] = [];
       let modelInfo: ModelInfo | null = null;
+      const typewriterQueueRef = { current: '' };
+      let displayedContent = '';
+      let typewriterTimer: number | null = null;
+
+      const stopTypewriter = () => {
+        if (typewriterTimer !== null) {
+          window.clearInterval(typewriterTimer);
+          typewriterTimer = null;
+        }
+      };
+      const renderAssistantContent = (content: string) => {
+        appendAssistantStreamingMessage(setMessages, content, modelInfo, traceSteps, toolResults);
+      };
+      const drainTypewriter = (force = false) => {
+        if (!typewriterQueueRef.current) return;
+        const chars = Array.from(typewriterQueueRef.current);
+        const take = force ? chars.length : Math.min(TYPEWRITER_CHARS_PER_FRAME, chars.length);
+        displayedContent += chars.slice(0, take).join('');
+        typewriterQueueRef.current = chars.slice(take).join('');
+        renderAssistantContent(displayedContent);
+        if (!typewriterQueueRef.current) stopTypewriter();
+      };
+      const enqueueDelta = (piece: string) => {
+        if (!piece) return;
+        typewriterQueueRef.current += piece;
+        if (typewriterTimer === null) {
+          typewriterTimer = window.setInterval(() => drainTypewriter(false), TYPEWRITER_FRAME_MS);
+        }
+      };
+      const flushTypewriter = () => {
+        drainTypewriter(true);
+        stopTypewriter();
+      };
 
       const appendStatus = (content: string, step?: TraceStep, totalMs?: number) => {
         setMessages(prev => {
           const nextStatus: DisplayMessage = {
             role: 'status',
             content,
-            trace: step ? [step] : undefined,
-            toolResults,
+            isStreaming: true,
+            // 过程气泡只保留一个；trace 存完整轨迹，折叠态只滚动展示最新阶段。
+            trace: traceSteps.length > 0 ? traceSteps : step ? [step] : undefined,
+            toolResults: toolResults.length > 0 ? toolResults : undefined,
             totalMs,
           };
+          const statusIndex = prev.findLastIndex(m => m.role === 'status' && m.isStreaming);
+          if (statusIndex >= 0) {
+            const newMsgs = [...prev];
+            newMsgs[statusIndex] = { ...newMsgs[statusIndex], ...nextStatus };
+            return newMsgs;
+          }
           return [...prev, nextStatus];
         });
       };
@@ -426,6 +503,11 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
             currentEvent = '';
 
             switch (eventType) {
+              case 'conversation':
+                if (data.conversation_id) {
+                  saveAssistantConversationId('floating_assistant', userId, tenantId, data.conversation_id);
+                }
+                break;
               case 'model_info':
               case 'model':
                 modelInfo = data;
@@ -456,31 +538,14 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
 
               case 'delta': {
                 const piece = data.content || '';
-                if (!piece) break;
-                currentContent += piece;
-                setMessages(prev => {
-                  const nextMsg: DisplayMessage = {
-                    role: 'assistant',
-                    content: currentContent,
-                    isStreaming: true,
-                    modelInfo: modelInfo || undefined,
-                    trace: traceSteps.length > 0 ? traceSteps : undefined,
-                    toolResults: toolResults.length > 0 ? toolResults : undefined,
-                  };
-                  const streamingIndex = prev.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
-                  if (streamingIndex >= 0) {
-                    const newMsgs = [...prev];
-                    newMsgs[streamingIndex] = { ...newMsgs[streamingIndex], ...nextMsg };
-                    return newMsgs;
-                  }
-                  return [...prev, nextMsg];
-                });
+                enqueueDelta(piece);
                 break;
               }
 
               case 'done': {
+                flushTypewriter();
                 const totalMs = data?.total_ms;
-                const finalContent = currentContent || '处理已完成，但模型没有返回可展示内容。请稍后重试或简化问题。';
+                const finalContent = displayedContent || '处理已完成，但模型没有返回可展示内容。请稍后重试或简化问题。';
                 setMessages(prev => {
                   const nextMsg: DisplayMessage = {
                     role: 'assistant',
@@ -491,22 +556,24 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
                     toolResults: toolResults.length > 0 ? toolResults : undefined,
                   };
-                  const streamingIndex = prev.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
+                  const filtered = prev.filter(m => !(m.role === 'status' && m.isStreaming));
+                  const streamingIndex = filtered.findLastIndex(m => m.role === 'assistant' && m.isStreaming);
                   if (streamingIndex >= 0) {
-                    const newMsgs = [...prev];
+                    const newMsgs = [...filtered];
                     newMsgs[streamingIndex] = { ...newMsgs[streamingIndex], ...nextMsg };
                     return newMsgs;
                   }
-                  return [...prev, nextMsg];
+                  return [...filtered, nextMsg];
                 });
                 if (!open) setUnread(u => u + 1);
-                currentContent = '';
                 break;
               }
 
               case 'error':
+                flushTypewriter();
                 setMessages(prev => {
-                  return [...prev, {
+                  const filtered = prev.filter(m => !(m.role === 'status' && m.isStreaming));
+                  return [...filtered, {
                     role: 'assistant',
                     content: `❌ ${data.message}`,
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
@@ -522,13 +589,14 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
       if ((err as Error).name === 'AbortError') return;
       const e = err as { message?: string };
       setMessages(prev => {
-        return [...prev, { role: 'assistant', content: `❌ 请求失败: ${e.message || '未知错误'}` }];
+        const filtered = prev.filter(m => !(m.role === 'status' && m.isStreaming));
+        return [...filtered, { role: 'assistant', content: `❌ 请求失败: ${e.message || '未知错误'}` }];
       });
     } finally {
       setSending(false);
       abortControllerRef.current = null;
     }
-  }, [input, sending, messages, tenantId, open]);
+  }, [input, sending, messages, tenantId, userId, open]);
 
   // 开启新对话
   const onNewChat = useCallback(() => {
@@ -540,6 +608,7 @@ const FloatingAssistant: React.FC<FloatingAssistantProps> = ({ tenantId, userId 
     if (userId && tenantId) {
       try { localStorage.removeItem(getChatKey(userId, tenantId)); } catch { /* ignore */ }
     }
+    clearAssistantConversationId('floating_assistant', userId, tenantId);
   }, [userId, tenantId]);
 
   return (

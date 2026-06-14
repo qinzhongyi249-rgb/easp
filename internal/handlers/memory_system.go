@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/easp-platform/easp/internal/memory"
+	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -106,14 +107,14 @@ func (h *MemorySystemHandler) SearchUserMemories(c *gin.Context) {
 		limit = 10
 	}
 
-	memories, err := h.memorySvc.SearchUserMemories(tenantID, userID, query, limit)
+	memories, explanations, err := h.memorySvc.SearchUserMemoriesWithExplanations(tenantID, userID, query, limit)
 	if err != nil {
 		log.Printf("Failed to search user memories: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search memories"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"memories": memories})
+	c.JSON(http.StatusOK, gin.H{"memories": memories, "explanations": explanations})
 }
 
 // SaveSessionMemory 保存会话记忆
@@ -299,7 +300,9 @@ func (h *MemorySystemHandler) ListEntities(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 { limit = 50 }
+	if limit <= 0 {
+		limit = 50
+	}
 
 	entities, err := h.memorySvc.ListEntities(tenantID, limit)
 	if err != nil {
@@ -315,7 +318,9 @@ func (h *MemorySystemHandler) ListSkillMemories(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 { limit = 50 }
+	if limit <= 0 {
+		limit = 50
+	}
 
 	memories, err := h.memorySvc.ListSkillMemories(tenantID, limit)
 	if err != nil {
@@ -331,7 +336,9 @@ func (h *MemorySystemHandler) ListAllUserMemories(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	limitStr := c.DefaultQuery("limit", "50")
 	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 { limit = 50 }
+	if limit <= 0 {
+		limit = 50
+	}
 
 	memories, err := h.memorySvc.ListAllUserMemories(tenantID, limit)
 	if err != nil {
@@ -340,6 +347,83 @@ func (h *MemorySystemHandler) ListAllUserMemories(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"memories": memories})
+}
+
+// GetMemorySettings 获取当前用户记忆治理设置
+func (h *MemorySystemHandler) GetMemorySettings(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	userID := c.Query("user_id")
+	if userID == "" {
+		if v, ok := c.Get(middleware.ContextUserID); ok {
+			userID, _ = v.(string)
+		}
+	}
+	c.JSON(http.StatusOK, h.memorySvc.GetMemorySettings(tenantID, userID))
+}
+
+// UpdateMemorySettings 更新当前用户或租户级记忆治理设置
+func (h *MemorySystemHandler) UpdateMemorySettings(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	userID := c.Query("user_id")
+	if userID == "" {
+		if v, ok := c.Get(middleware.ContextUserID); ok {
+			userID, _ = v.(string)
+		}
+	}
+	var req struct {
+		AutoExtractEnabled     *bool  `json:"auto_extract_enabled"`
+		RecallEnabled          *bool  `json:"recall_enabled"`
+		SensitiveFilterEnabled *bool  `json:"sensitive_filter_enabled"`
+		AuditEnabled           *bool  `json:"audit_enabled"`
+		HybridSearchEnabled    *bool  `json:"hybrid_search_enabled"`
+		HybridSearchMode       string `json:"hybrid_search_mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	settings := h.memorySvc.GetMemorySettings(tenantID, userID)
+	if req.AutoExtractEnabled != nil {
+		settings.AutoExtractEnabled = *req.AutoExtractEnabled
+	}
+	if req.RecallEnabled != nil {
+		settings.RecallEnabled = *req.RecallEnabled
+	}
+	if req.SensitiveFilterEnabled != nil {
+		settings.SensitiveFilterEnabled = *req.SensitiveFilterEnabled
+	}
+	if req.AuditEnabled != nil {
+		settings.AuditEnabled = *req.AuditEnabled
+	}
+	if req.HybridSearchEnabled != nil {
+		settings.HybridSearchEnabled = *req.HybridSearchEnabled
+	}
+	if req.HybridSearchMode != "" {
+		settings.HybridSearchMode = req.HybridSearchMode
+	}
+	if err := h.memorySvc.SaveMemorySettings(settings); err != nil {
+		log.Printf("Failed to save memory settings: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save memory settings"})
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+// ListMemoryAuditLogs 列出记忆治理审计日志
+func (h *MemorySystemHandler) ListMemoryAuditLogs(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 50
+	}
+	logs, err := h.memorySvc.ListMemoryAuditLogs(tenantID, limit)
+	if err != nil {
+		log.Printf("Failed to list memory audit logs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list memory audit logs"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"logs": logs})
 }
 
 // GetMemoryStats 获取记忆统计

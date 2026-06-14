@@ -18,6 +18,17 @@ export interface MemoryPool {
   updated_at: string;
 }
 
+export interface MemoryEntry {
+  id: string;
+  pool_id: string;
+  type: string;
+  content: string;
+  metadata?: string | null;
+  sensitivity: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface VectorMemory {
   id: string;
   tenant_id: string;
@@ -36,12 +47,56 @@ export interface UserMemory {
   pool_id?: string;
   type: string; // preference/fact/feedback
   content: string;
+  content_hash?: string;
+  source?: string;
+  status?: string;
   entity_ids: string[];
   metadata: Record<string, unknown>;
   access_count: number;
   last_accessed_at: string | null;
+  last_seen_at?: string | null;
+  vector_indexed_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MemorySettings {
+  id: string;
+  tenant_id: string;
+  user_id?: string | null;
+  auto_extract_enabled: boolean;
+  recall_enabled: boolean;
+  sensitive_filter_enabled: boolean;
+  audit_enabled: boolean;
+  hybrid_search_enabled: boolean;
+  hybrid_search_mode: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MemoryScoreBreakdown {
+  memory_id: string;
+  keyword_score: number;
+  vector_score: number;
+  recency_score: number;
+  frequency_score: number;
+  type_score: number;
+  final_score: number;
+  explanation: string;
+}
+
+export interface MemoryAuditLog {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  memory_id?: string | null;
+  action: string;
+  source: string;
+  original_preview?: string;
+  sanitized_preview?: string;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface Entity {
@@ -87,6 +142,8 @@ export const memoryApi = {
     client.post<MemoryPool>(`/tenants/${tenantId}/memory-pools`, data),
   getPool: (poolId: string) =>
     client.get<MemoryPool>(`/memory-pools/${poolId}`),
+  listEntries: (poolId: string, limit = 50, type?: string) =>
+    client.get<MemoryEntry[]>(`/memory-pools/${poolId}/entries`, { params: { limit, type } }),
   updatePool: (poolId: string, data: Partial<MemoryPool>) =>
     client.put<MemoryPool>(`/memory-pools/${poolId}`, data),
   deletePool: (poolId: string) =>
@@ -105,6 +162,16 @@ export const memoryApi = {
   // User memories (all users in tenant)
   listAllUserMemories: (tenantId: string, limit = 50) =>
     client.get<{ memories: UserMemory[] }>(`/tenants/${tenantId}/user-memories`, { params: { limit } }),
+  searchUserMemories: (tenantId: string, userId: string, query: string, limit = 10) =>
+    client.get<{ memories: UserMemory[]; explanations: MemoryScoreBreakdown[] }>(`/tenants/${tenantId}/users/${userId}/memories/search`, { params: { q: query, limit } }),
+
+  // Governance settings and audit logs
+  getSettings: (tenantId: string, userId?: string) =>
+    client.get<MemorySettings>(`/tenants/${tenantId}/memory-settings`, { params: { user_id: userId } }),
+  updateSettings: (tenantId: string, data: Partial<MemorySettings>, userId?: string) =>
+    client.put<MemorySettings>(`/tenants/${tenantId}/memory-settings`, data, { params: { user_id: userId } }),
+  listAuditLogs: (tenantId: string, limit = 50) =>
+    client.get<{ logs: MemoryAuditLog[] }>(`/tenants/${tenantId}/memory-audit-logs`, { params: { limit } }),
 
   // Entities
   listEntities: (tenantId: string, limit = 50) =>

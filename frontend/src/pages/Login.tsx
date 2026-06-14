@@ -15,21 +15,21 @@ const Login: React.FC = () => {
   const { message } = App.useApp();
   const isMobile = window.innerWidth < 768;
 
-  const onLogin = async (values: { email: string; password: string }) => {
+  const onLogin = async (values: { identifier: string; password: string; tenant_id?: string }) => {
     setLoading(true);
     try {
-      await login(values.email, values.password);
+      await login(values.identifier, values.password, values.tenant_id);
       message.success('登录成功');
       navigate('/dashboard', { replace: true });
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      message.error(e.response?.data?.error || '邮箱或密码错误');
+      message.error(e.response?.data?.error || '账号或密码错误');
     } finally {
       setLoading(false);
     }
   };
 
-  const onRegister = async (values: { tenant_id: string; email: string; password: string; display_name: string }) => {
+  const onRegister = async (values: { tenant_id: string; email?: string; phone?: string; password: string; display_name: string }) => {
     setLoading(true);
     try {
       await authApi.register(values);
@@ -67,8 +67,11 @@ const Login: React.FC = () => {
             label: '登录',
             children: (
               <Form onFinish={onLogin} size={isMobile ? 'middle' : 'large'}>
-                <Form.Item name="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
-                  <Input prefix={<UserOutlined />} placeholder="邮箱" />
+                <Form.Item name="tenant_id">
+                  <Input placeholder="租户号（选填）" />
+                </Form.Item>
+                <Form.Item name="identifier" rules={[{ required: true, message: '请输入邮箱或手机号' }]}>
+                  <Input prefix={<UserOutlined />} placeholder="邮箱 / 手机号" />
                 </Form.Item>
                 <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
                   <Input.Password prefix={<LockOutlined />} placeholder="密码" />
@@ -76,9 +79,6 @@ const Login: React.FC = () => {
                 <Form.Item>
                   <Button type="primary" htmlType="submit" loading={loading} block>登录</Button>
                 </Form.Item>
-                <div style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
-                  默认管理员: admin@easp.com / admin123
-                </div>
               </Form>
             ),
           },
@@ -90,8 +90,11 @@ const Login: React.FC = () => {
                 <Form.Item name="tenant_id" rules={[{ required: true, message: '请输入租户ID' }]}>
                   <Input placeholder="租户ID" />
                 </Form.Item>
-                <Form.Item name="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+                <Form.Item name="email" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
                   <Input prefix={<UserOutlined />} placeholder="邮箱" />
+                </Form.Item>
+                <Form.Item name="phone">
+                  <Input placeholder="手机号（邮箱或手机号至少填一个）" />
                 </Form.Item>
                 <Form.Item name="display_name">
                   <Input placeholder="显示名称（可选）" />

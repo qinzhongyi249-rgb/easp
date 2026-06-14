@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/easp-platform/easp/internal/models"
 )
@@ -18,22 +19,22 @@ type MemoryRouter struct {
 // RouterConfig 路由器配置（可配置，不写死）
 type RouterConfig struct {
 	// 用户记忆配置
-	UserMemoryLimit    int  `json:"user_memory_limit"`    // 最多加载几条用户记忆，默认5
-	UserMemoryEnabled  bool `json:"user_memory_enabled"`  // 是否启用用户记忆
+	UserMemoryLimit   int  `json:"user_memory_limit"`   // 最多加载几条用户记忆，默认5
+	UserMemoryEnabled bool `json:"user_memory_enabled"` // 是否启用用户记忆
 
 	// 技能记忆配置
 	SkillMemoryLimit   int  `json:"skill_memory_limit"`   // 最多加载几条技能记忆，默认3
 	SkillMemoryEnabled bool `json:"skill_memory_enabled"` // 是否启用技能记忆
 
 	// 实体记忆配置
-	EntityLimit        int  `json:"entity_limit"`         // 最多加载几个实体，默认5
-	EntityEnabled      bool `json:"entity_enabled"`       // 是否启用实体记忆
+	EntityLimit   int  `json:"entity_limit"`   // 最多加载几个实体，默认5
+	EntityEnabled bool `json:"entity_enabled"` // 是否启用实体记忆
 
 	// 角色记忆配置
-	RoleMemoryEnabled  bool `json:"role_memory_enabled"`  // 是否启用角色级记忆共享
+	RoleMemoryEnabled bool `json:"role_memory_enabled"` // 是否启用角色级记忆共享
 
 	// 记忆提取配置
-	ExtractEnabled     bool `json:"extract_enabled"`      // 是否启用记忆提取
+	ExtractEnabled bool `json:"extract_enabled"` // 是否启用记忆提取
 }
 
 // DefaultRouterConfig 默认配置
@@ -78,28 +79,30 @@ func (r *MemoryRouter) GetMemoryService() *MemoryService {
 // LoadMemories 按需加载记忆（核心方法）
 func (r *MemoryRouter) LoadMemories(tenantID, userID, query string, permissions []string) *MemoryContext {
 	ctx := &MemoryContext{}
-	log.Printf("MemoryRouter: loading memories for tenant=%s, user=%s, query=%s", tenantID, userID, truncate(query, 50))
-
-	// 并行加载各类记忆
-	// 1. 用户个人记忆
-	if r.config.UserMemoryEnabled {
-		r.loadUserMemories(ctx, tenantID, userID, query)
+	settings := r.memorySvc.GetMemorySettings(tenantID, userID)
+	if !settings.RecallEnabled {
+		log.Printf("MemoryRouter: recall disabled for tenant=%s, user=%s", tenantID, userID)
+		return ctx
 	}
+	log.Printf("MemoryRouter: loading memories for tenant=%s, user=%s, query=%s, hybrid=%v/%s", tenantID, userID, truncate(query, 50), settings.HybridSearchEnabled, settings.HybridSearchMode)
 
-	// 2. 技能记忆（共享）
-	if r.config.SkillMemoryEnabled {
-		r.loadSkillMemories(ctx, tenantID, query)
+	// 并行加载各类记忆：向量/关键词/实体召回互不阻塞，降低模型前置理解等待时间。
+	var wg sync.WaitGroup
+	run := func(enabled bool, fn func()) {
+		if !enabled {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn()
+		}()
 	}
-
-	// 3. 实体记忆（共享）
-	if r.config.EntityEnabled {
-		r.loadEntityMemories(ctx, tenantID, query)
-	}
-
-	// 4. 角色共享记忆（同角色其他用户的记忆）
-	if r.config.RoleMemoryEnabled && len(permissions) > 0 {
-		r.loadRoleMemories(ctx, tenantID, userID, query, permissions)
-	}
+	run(r.config.UserMemoryEnabled, func() { r.loadUserMemories(ctx, tenantID, userID, query) })
+	run(r.config.SkillMemoryEnabled, func() { r.loadSkillMemories(ctx, tenantID, query) })
+	run(r.config.EntityEnabled, func() { r.loadEntityMemories(ctx, tenantID, query) })
+	run(r.config.RoleMemoryEnabled && len(permissions) > 0, func() { r.loadRoleMemories(ctx, tenantID, userID, query, permissions) })
+	wg.Wait()
 
 	return ctx
 }

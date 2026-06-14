@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -44,17 +45,18 @@ type Step struct {
 
 // SkillExecution Skill执行实例
 type SkillExecution struct {
-	ID          string                 `json:"id"`
-	SkillID     string                 `json:"skill_id"`
-	TenantID    string                 `json:"tenant_id"`
-	Status      string                 `json:"status"`
-	Inputs      map[string]interface{} `json:"inputs"`
-	Outputs     map[string]interface{} `json:"outputs"`
-	StepResults []StepResult           `json:"step_results"`
-	StartedAt   time.Time              `json:"started_at"`
-	EndedAt     *time.Time             `json:"ended_at,omitempty"`
-	DurationMS  int64                  `json:"duration_ms"`
-	Error       string                 `json:"error,omitempty"`
+	ID            string                 `db:"id" json:"id"`
+	SkillID       string                 `db:"skill_id" json:"skill_id"`
+	TenantID      string                 `db:"tenant_id" json:"tenant_id"`
+	Status        string                 `db:"status" json:"status"`
+	ExecutionMode string                 `db:"execution_mode" json:"execution_mode"`
+	Inputs        map[string]interface{} `db:"inputs" json:"inputs"`
+	Outputs       map[string]interface{} `db:"outputs" json:"outputs"`
+	StepResults   []StepResult           `db:"step_results" json:"step_results"`
+	StartedAt     time.Time              `db:"started_at" json:"started_at"`
+	EndedAt       *time.Time             `db:"ended_at" json:"ended_at,omitempty"`
+	DurationMS    int64                  `db:"duration_ms" json:"duration_ms"`
+	Error         string                 `db:"error" json:"error,omitempty"`
 }
 
 // StepResult 步骤结果
@@ -99,6 +101,67 @@ func (e *SkillEngine) registerDefaultExecutors() {
 	e.stepExecutors["assign"] = func(ctx context.Context, step Step, inputs map[string]interface{}) (map[string]interface{}, error) {
 		return step.Params, nil
 	}
+
+	// required：检查关键字段，缺失时返回 requires_input，让 AI 助手向用户追问，不继续执行副作用步骤。
+	e.stepExecutors["required"] = func(ctx context.Context, step Step, inputs map[string]interface{}) (map[string]interface{}, error) {
+		fields := stringSliceParam(step.Params["fields"])
+		variables := inputs
+		if v, ok := inputs["__variables"].(map[string]interface{}); ok {
+			variables = v
+		}
+		missing := make([]string, 0)
+		for _, field := range fields {
+			if isEmptyValue(variables[field]) {
+				missing = append(missing, field)
+			}
+		}
+		if len(missing) > 0 {
+			message, _ := step.Params["message"].(string)
+			if message == "" {
+				message = "请补充必要信息后再继续。"
+			}
+			return map[string]interface{}{
+				"requires_input": true,
+				"missing_fields": missing,
+				"message":        message,
+			}, nil
+		}
+		return map[string]interface{}{"requires_input": false}, nil
+	}
+
+	// parallel：并发执行 params.steps 中的子步骤，用于查询现状/校验条件等互不依赖步骤。
+	e.stepExecutors["parallel"] = func(ctx context.Context, step Step, inputs map[string]interface{}) (map[string]interface{}, error) {
+		childSteps, err := parseChildSteps(step.Params["steps"])
+		if err != nil {
+			return nil, err
+		}
+		outputs := make(map[string]interface{})
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		var firstErr error
+		for _, child := range childSteps {
+			child := child
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				childResult := e.executeStep(ctx, child, cloneVariables(inputs))
+				mu.Lock()
+				defer mu.Unlock()
+				outputs[child.Name] = childResult.Outputs
+				if child.OutputVar != "" {
+					outputs[child.OutputVar] = childResult.Outputs
+				}
+				if childResult.Status == "failed" && firstErr == nil {
+					firstErr = fmt.Errorf("parallel child %s failed: %s", child.Name, childResult.Error)
+				}
+			}()
+		}
+		wg.Wait()
+		if firstErr != nil {
+			return outputs, firstErr
+		}
+		return outputs, nil
+	}
 }
 
 // registerMCPToolExecutor 注册MCP工具执行器
@@ -120,6 +183,9 @@ func (e *SkillEngine) registerMCPToolExecutor() {
 			finalParams[k] = v
 		}
 		for k, v := range inputs {
+			if strings.HasPrefix(k, "__") {
+				continue
+			}
 			finalParams[k] = v
 		}
 
@@ -220,14 +286,31 @@ func (e *SkillEngine) RegisterExecutor(stepType string, executor StepExecutor) {
 
 // Execute 执行Skill
 func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs map[string]interface{}) (*SkillExecution, error) {
+	return e.ExecuteWithMode(ctx, skill, inputs, ExecutionModeProduction)
+}
+
+// ExecuteWithMode 按执行模式执行Skill。sandbox/dry_run 只做计划与参数解析，不触发外部副作用。
+func (e *SkillEngine) ExecuteWithMode(ctx context.Context, skill models.Skill, inputs map[string]interface{}, executionMode string) (*SkillExecution, error) {
+	executionMode = NormalizeExecutionMode(executionMode)
 	execution := &SkillExecution{
-		ID:        generateID(),
-		SkillID:   skill.ID,
-		TenantID:  skill.TenantID,
-		Status:    "running",
-		Inputs:    inputs,
-		Outputs:   make(map[string]interface{}),
-		StartedAt: time.Now(),
+		ID:            generateID(),
+		SkillID:       skill.ID,
+		TenantID:      skill.TenantID,
+		Status:        "running",
+		ExecutionMode: executionMode,
+		Inputs:        inputs,
+		Outputs:       make(map[string]interface{}),
+		StartedAt:     time.Now(),
+	}
+
+	if err := CanExecuteSkill(skill, executionMode); err != nil {
+		execution.Status = "failed"
+		execution.Error = err.Error()
+		now := time.Now()
+		execution.EndedAt = &now
+		execution.DurationMS = now.Sub(execution.StartedAt).Milliseconds()
+		e.saveExecution(execution)
+		return execution, err
 	}
 
 	// 解析步骤
@@ -236,6 +319,32 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 		execution.Status = "failed"
 		execution.Error = fmt.Sprintf("failed to parse steps: %v", err)
 		return execution, err
+	}
+
+	if ShouldSkipSideEffects(executionMode) {
+		for _, step := range steps {
+			execution.StepResults = append(execution.StepResults, StepResult{
+				StepName: step.Name,
+				Status:   "skipped",
+				Outputs: map[string]interface{}{
+					"execution_mode": executionMode,
+					"step_type":      step.Type,
+					"action":         step.Action,
+					"dry_run":        true,
+				},
+			})
+		}
+		execution.Status = "completed"
+		execution.Outputs = map[string]interface{}{
+			"execution_mode": executionMode,
+			"dry_run":        true,
+			"message":        "沙箱/预演模式未执行外部副作用步骤",
+		}
+		now := time.Now()
+		execution.EndedAt = &now
+		execution.DurationMS = now.Sub(execution.StartedAt).Milliseconds()
+		e.saveExecution(execution)
+		return execution, nil
 	}
 
 	logger.Info("skill", "execution started",
@@ -268,6 +377,11 @@ func (e *SkillEngine) Execute(ctx context.Context, skill models.Skill, inputs ma
 		)
 		stepResult := e.executeStep(ctx, *step, variables)
 		execution.StepResults = append(execution.StepResults, stepResult)
+		if isRequiresInputResult(stepResult) {
+			execution.Status = "requires_input"
+			execution.Outputs = stepResult.Outputs
+			break
+		}
 		if stepResult.Status == "failed" {
 			logger.Error("skill", "step failed",
 				logger.Field("execution_id", execution.ID),
@@ -366,6 +480,13 @@ func (e *SkillEngine) ExecuteWithMCP(ctx context.Context, tenantID string, rawSt
 
 		stepResult := e.executeStep(ctx, *step, variables)
 		stepResults = append(stepResults, stepResult)
+		if isRequiresInputResult(stepResult) {
+			return map[string]interface{}{
+				"status":       "requires_input",
+				"outputs":      stepResult.Outputs,
+				"step_results": stepResults,
+			}, nil
+		}
 
 		if stepResult.Status == "failed" {
 			if step.NextOnFail != "" {
@@ -450,6 +571,7 @@ func (e *SkillEngine) executeStep(ctx context.Context, step Step, variables map[
 
 	// 解析参数（变量替换）
 	params := e.resolveParams(step.Params, variables)
+	params["__variables"] = variables
 
 	// 执行步骤
 	executor, ok := e.stepExecutors[step.Type]
@@ -549,16 +671,92 @@ func (e *SkillEngine) getNestedValue(path string, variables map[string]interface
 	return current
 }
 
+func stringSliceParam(v interface{}) []string {
+	switch val := v.(type) {
+	case []string:
+		return val
+	case []interface{}:
+		result := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				result = append(result, strings.TrimSpace(s))
+			}
+		}
+		return result
+	case string:
+		if strings.TrimSpace(val) == "" {
+			return nil
+		}
+		parts := strings.Split(val, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if s := strings.TrimSpace(part); s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func isEmptyValue(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s) == ""
+	}
+	return false
+}
+
+func parseChildSteps(v interface{}) ([]Step, error) {
+	if v == nil {
+		return nil, fmt.Errorf("parallel step requires params.steps")
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal parallel steps: %w", err)
+	}
+	var steps []Step
+	if err := json.Unmarshal(data, &steps); err != nil {
+		return nil, fmt.Errorf("failed to parse parallel steps: %w", err)
+	}
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("parallel step requires at least one child step")
+	}
+	return steps, nil
+}
+
+func cloneVariables(src map[string]interface{}) map[string]interface{} {
+	dst := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func isRequiresInputResult(result StepResult) bool {
+	if result.Status != "completed" || result.Outputs == nil {
+		return false
+	}
+	requires, _ := result.Outputs["requires_input"].(bool)
+	return requires
+}
+
 // saveExecution 保存执行记录
 func (e *SkillEngine) saveExecution(execution *SkillExecution) {
+	if database.DB == nil {
+		return
+	}
 	inputsJSON, _ := json.Marshal(execution.Inputs)
 	outputsJSON, _ := json.Marshal(execution.Outputs)
 	stepResultsJSON, _ := json.Marshal(execution.StepResults)
 
-	query := `INSERT INTO skill_executions (id, skill_id, tenant_id, status, inputs, outputs, step_results, error, started_at, ended_at)
-			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO skill_executions (id, skill_id, tenant_id, status, execution_mode, inputs, outputs, step_results, error, started_at, ended_at)
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := database.DB.Exec(query,
-		execution.ID, execution.SkillID, execution.TenantID, execution.Status,
+		execution.ID, execution.SkillID, execution.TenantID, execution.Status, execution.ExecutionMode,
 		string(inputsJSON), string(outputsJSON), string(stepResultsJSON),
 		execution.Error, execution.StartedAt, execution.EndedAt)
 	if err != nil {

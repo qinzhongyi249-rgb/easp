@@ -172,7 +172,7 @@ func normalizeSkillActionName(toolName string) string {
 
 func isBuiltinSkillTool(toolName string) bool {
 	switch toolName {
-	case "list_users", "get_user", "assign_role", "revoke_role", "list_roles",
+	case "list_users", "get_user", "create_user", "assign_role", "revoke_role", "list_roles", "create_role",
 		"list_connectors", "get_connector", "create_connector", "update_connector",
 		"list_mcp_tools", "get_mcp_tool", "create_mcp_tool", "update_mcp_tool",
 		"list_skills", "get_skill", "create_skill", "update_skill",
@@ -196,7 +196,8 @@ func (h *SkillEngineHandler) ExecuteSkill(c *gin.Context) {
 	}
 
 	var req struct {
-		Inputs map[string]interface{} `json:"inputs"`
+		Inputs        map[string]interface{} `json:"inputs"`
+		ExecutionMode string                 `json:"execution_mode"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -211,6 +212,7 @@ func (h *SkillEngineHandler) ExecuteSkill(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
 		return
 	}
+	executionMode := skill.NormalizeExecutionMode(req.ExecutionMode)
 
 	// 创建MCP caller函数
 	// 兼容两类 action：
@@ -248,13 +250,17 @@ func (h *SkillEngineHandler) ExecuteSkill(c *gin.Context) {
 		if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", normalizedToolName, tenantID); err != nil {
 			return nil, fmt.Errorf("MCP tool not found: %s", toolName)
 		}
+		if err := skill.CanExecuteMCPTool(mcpTool, executionMode); err != nil {
+			return nil, err
+		}
 		var connector models.Connector
 		if err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ?", mcpTool.ConnectorID); err != nil {
 			return nil, fmt.Errorf("connector not found")
 		}
 		mcpHandler := NewMCPHandler()
 		toolStart := time.Now()
-		resp, callErr := mcpHandler.proxy.CallTool(ctx, mcp.ToolCallRequest{
+		ctxWithToken := contextWithUserSSOToken(ctx, tenantID, uid)
+		resp, callErr := mcpHandler.proxy.CallTool(ctxWithToken, mcp.ToolCallRequest{
 			Tool:      mcpTool,
 			Connector: connector,
 			Arguments: arguments,
@@ -278,7 +284,7 @@ func (h *SkillEngineHandler) ExecuteSkill(c *gin.Context) {
 
 	// 创建带MCP调用能力的引擎
 	engine := skill.NewSkillEngineWithCaller(tenantID, mcpCaller)
-	execution, err := engine.Execute(c.Request.Context(), skillDef, req.Inputs)
+	execution, err := engine.ExecuteWithMode(c.Request.Context(), skillDef, req.Inputs, executionMode)
 	if err != nil {
 		log.Printf("Failed to execute skill: %v", err)
 		RecordToolCallUsage(tenantID, uid, "skill", skillDef.ID, skillDef.Name, "manual", "failed", int(time.Since(start).Milliseconds()), requestID, err)

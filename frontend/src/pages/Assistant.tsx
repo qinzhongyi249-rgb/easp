@@ -7,7 +7,14 @@ import {
   DownOutlined
 } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { MarkdownRenderer, MARKDOWN_CSS } from '../utils/markdown';
+import {
+  buildAssistantPageContext,
+  clearAssistantConversationId,
+  loadAssistantConversationId,
+  saveAssistantConversationId,
+} from '../utils/assistantContext';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -57,6 +64,36 @@ const stageConfig: Record<string, { icon: React.ReactNode; color: string; label:
   plan: { icon: <BranchesOutlined />, color: '#722ed1', label: '工具规划' },
   tool_calling: { icon: <ToolOutlined />, color: '#fa8c16', label: '执行工具' },
   generating: { icon: <ThunderboltOutlined />, color: '#52c41a', label: '生成回答' },
+};
+
+const TYPEWRITER_FRAME_MS = 24;
+const TYPEWRITER_CHARS_PER_FRAME = 3;
+
+const appendAssistantStreamingMessage = (
+  updater: React.Dispatch<React.SetStateAction<DisplayMessage[]>>,
+  content: string,
+  modelInfo?: ModelInfo | null,
+  traceSteps: TraceStep[] = [],
+  toolResults: ToolResult[] = [],
+) => {
+  updater(prev => {
+    const filtered = prev.filter(m => m.role !== 'status');
+    const last = filtered[filtered.length - 1];
+    const nextMsg: DisplayMessage = {
+      role: 'assistant',
+      content,
+      isStreaming: true,
+      modelInfo: modelInfo || undefined,
+      trace: traceSteps.length > 0 ? traceSteps : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+    };
+    if (last?.role === 'assistant' && last.isStreaming) {
+      const next = [...filtered];
+      next[next.length - 1] = { ...last, ...nextMsg };
+      return next;
+    }
+    return [...filtered, nextMsg];
+  });
 };
 
 const TraceTimeline: React.FC<{
@@ -140,6 +177,7 @@ const TraceTimeline: React.FC<{
 
 const Assistant: React.FC = () => {
   const { currentTenant } = useOutletContext<LayoutContext>();
+  const { user } = useAuth();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [sending, setSending] = useState(false);
@@ -164,10 +202,15 @@ const Assistant: React.FC = () => {
 
     try {
       abortControllerRef.current = new AbortController();
+      const conversationId = loadAssistantConversationId('assistant_page', user?.id, currentTenant);
       const res = await fetch(`/api/v1/tenants/${currentTenant}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
-        body: JSON.stringify({ messages: [{ role: 'user', content: input.trim() }] }),
+        body: JSON.stringify({
+          conversation_id: conversationId || undefined,
+          page_context: buildAssistantPageContext('assistant_page', currentTenant, user?.id),
+          messages: [{ role: 'user', content: input.trim() }],
+        }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -178,11 +221,43 @@ const Assistant: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = '';
-      let assistantContent = '';
       let traceSteps: TraceStep[] = [];
       let toolResults: ToolResult[] = [];
       let modelInfo: ModelInfo | null = null;
       let totalMs: number | undefined;
+      const typewriterQueueRef = { current: '' };
+      let displayedContent = '';
+      let typewriterTimer: number | null = null;
+
+      const stopTypewriter = () => {
+        if (typewriterTimer !== null) {
+          window.clearInterval(typewriterTimer);
+          typewriterTimer = null;
+        }
+      };
+      const renderAssistantContent = (content: string) => {
+        appendAssistantStreamingMessage(setMessages, content, modelInfo, traceSteps, toolResults);
+      };
+      const drainTypewriter = (force = false) => {
+        if (!typewriterQueueRef.current) return;
+        const chars = Array.from(typewriterQueueRef.current);
+        const take = force ? chars.length : Math.min(TYPEWRITER_CHARS_PER_FRAME, chars.length);
+        displayedContent += chars.slice(0, take).join('');
+        typewriterQueueRef.current = chars.slice(take).join('');
+        renderAssistantContent(displayedContent);
+        if (!typewriterQueueRef.current) stopTypewriter();
+      };
+      const enqueueDelta = (piece: string) => {
+        if (!piece) return;
+        typewriterQueueRef.current += piece;
+        if (typewriterTimer === null) {
+          typewriterTimer = window.setInterval(() => drainTypewriter(false), TYPEWRITER_FRAME_MS);
+        }
+      };
+      const flushTypewriter = () => {
+        drainTypewriter(true);
+        stopTypewriter();
+      };
 
       const updateStatus = (content: string, trace?: TraceStep[]) => {
         setMessages(prev => {
@@ -221,6 +296,11 @@ const Assistant: React.FC = () => {
             const eventType = currentEvent || data.type || 'message';
             currentEvent = '';
             switch (eventType) {
+              case 'conversation':
+                if (data.conversation_id) {
+                  saveAssistantConversationId('assistant_page', user?.id, currentTenant, data.conversation_id);
+                }
+                break;
               case 'model_info':
               case 'model':
                 modelInfo = { model: data.model, display_name: data.display_name, provider: data.provider };
@@ -239,35 +319,18 @@ const Assistant: React.FC = () => {
                 updateStatus(`✓ ${data.name} 完成`, traceSteps);
                 break;
               case 'delta':
-                assistantContent += data.content || '';
-                setMessages(prev => {
-                  const filtered = prev.filter(m => m.role !== 'status');
-                  const last = filtered[filtered.length - 1];
-                  const nextMsg: DisplayMessage = {
-                    role: 'assistant',
-                    content: assistantContent,
-                    isStreaming: true,
-                    modelInfo: modelInfo || undefined,
-                    trace: traceSteps.length > 0 ? traceSteps : undefined,
-                    toolResults: toolResults.length > 0 ? toolResults : undefined,
-                  };
-                  if (last?.role === 'assistant' && last.isStreaming) {
-                    const next = [...filtered];
-                    next[next.length - 1] = { ...last, ...nextMsg };
-                    return next;
-                  }
-                  return [...filtered, nextMsg];
-                });
+                enqueueDelta(data.content || '');
                 break;
               case 'done':
+                flushTypewriter();
                 totalMs = data?.total_ms;
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
-                  if (!assistantContent) return filtered;
+                  if (!displayedContent) return filtered;
                   const last = filtered[filtered.length - 1];
                   const nextMsg: DisplayMessage = {
                     role: 'assistant',
-                    content: assistantContent,
+                    content: displayedContent,
                     isStreaming: false,
                     modelInfo: modelInfo || undefined,
                     trace: traceSteps.length > 0 ? traceSteps : undefined,
@@ -283,6 +346,7 @@ const Assistant: React.FC = () => {
                 });
                 break;
               case 'error':
+                flushTypewriter();
                 setMessages(prev => {
                   const filtered = prev.filter(m => m.role !== 'status');
                   return [...filtered, { role: 'assistant', content: `❌ ${data.message}` }];
@@ -305,10 +369,11 @@ const Assistant: React.FC = () => {
       setSending(false);
       abortControllerRef.current = null;
     }
-  }, [input, sending, messages, currentTenant]);
+  }, [input, sending, messages, currentTenant, user?.id]);
 
   const onClear = () => {
     abortControllerRef.current?.abort();
+    clearAssistantConversationId('assistant_page', user?.id, currentTenant);
     setMessages([]);
     setSending(false);
     setCurrentModel(null);

@@ -12,6 +12,7 @@ import (
 	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/openapi"
+	skillPkg "github.com/easp-platform/easp/internal/skill"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -155,6 +156,51 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 		return
 	}
 
+	// 解析参数与执行模式。空 execution_mode 归一为 sandbox，避免测试调用默认打生产。
+	var arguments json.RawMessage
+	executionMode := skillPkg.ExecutionModeSandbox
+	if c.Request.Body != nil {
+		body, _ := c.GetRawData()
+		if len(body) > 0 {
+			// 尝试解析为arguments
+			var req struct {
+				Arguments     json.RawMessage `json:"arguments"`
+				ExecutionMode string          `json:"execution_mode"`
+			}
+			if err := json.Unmarshal(body, &req); err == nil {
+				executionMode = skillPkg.NormalizeExecutionMode(req.ExecutionMode)
+				if req.Arguments != nil {
+					arguments = req.Arguments
+				} else {
+					arguments = body
+				}
+			} else {
+				arguments = body
+			}
+		}
+	}
+	if err := skillPkg.CanExecuteMCPTool(tool, executionMode); err != nil {
+		RecordToolCallUsage(tenantID, uid, "mcp_tool", tool.ID, tool.Name, "mcp_api", "failed", int(time.Since(start).Milliseconds()), requestID, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "execution_mode": executionMode})
+		return
+	}
+	if skillPkg.ShouldSkipSideEffects(executionMode) {
+		RecordToolCallUsage(tenantID, uid, "mcp_tool", tool.ID, tool.Name, "mcp_api", "success", int(time.Since(start).Milliseconds()), requestID, nil)
+		c.JSON(http.StatusOK, mcp.ToolCallResponse{
+			Success: true,
+			Data: gin.H{
+				"execution_mode": executionMode,
+				"dry_run":        true,
+				"message":        "沙箱/预演模式未执行MCP外部调用",
+				"tool_id":        tool.ID,
+				"tool_name":      tool.Name,
+				"arguments":      arguments,
+			},
+			Latency: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+
 	// 获取连接器
 	var connector models.Connector
 	err = database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ?", tool.ConnectorID)
@@ -163,25 +209,9 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 		return
 	}
 
-	// 解析参数
-	var arguments json.RawMessage
-	if c.Request.Body != nil {
-		body, _ := c.GetRawData()
-		if len(body) > 0 {
-			// 尝试解析为arguments
-			var req struct {
-				Arguments json.RawMessage `json:"arguments"`
-			}
-			if err := json.Unmarshal(body, &req); err == nil && req.Arguments != nil {
-				arguments = req.Arguments
-			} else {
-				arguments = body
-			}
-		}
-	}
-
 	// 调用工具
-	resp, err := h.proxy.CallTool(c.Request.Context(), mcp.ToolCallRequest{
+	ctx := contextWithUserSSOToken(c.Request.Context(), tenantID, uid)
+	resp, err := h.proxy.CallTool(ctx, mcp.ToolCallRequest{
 		Tool:      tool,
 		Connector: connector,
 		Arguments: arguments,
@@ -203,7 +233,7 @@ func (h *MCPHandler) GetMCPInfo(c *gin.Context) {
 
 	// 获取工具数量
 	var toolCount int
-	database.DB.Get(&toolCount, "SELECT COUNT(*) FROM mcp_tools WHERE tenant_id = ? AND enabled = true", tenantID)
+	database.DB.Get(&toolCount, "SELECT COUNT(*) FROM mcp_tools WHERE tenant_id = ? AND enabled = true AND status IN ('published', 'active')", tenantID)
 
 	// 获取连接器数量
 	var connectorCount int
@@ -230,7 +260,7 @@ func (h *MCPHandler) ListMCPTools(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
 	var tools []models.MCPTool
-	err := database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true ORDER BY name", tenantID)
+	err := database.DB.Select(&tools, "SELECT * FROM mcp_tools WHERE tenant_id = ? AND enabled = true AND status IN ('published', 'active') ORDER BY name", tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tools"})
 		return
@@ -334,14 +364,23 @@ func ptrString(s string) *string {
 	return &s
 }
 
-// ImportOpenAPIRequest 导入OpenAPI请求
+// ImportOpenAPIRequest 导入OpenAPI/RESTful API请求
 type ImportOpenAPIRequest struct {
-	Name        string `json:"name" binding:"required"`
-	BaseURL     string `json:"base_url" binding:"required"`
-	SpecContent string `json:"spec_content" binding:"required"`
+	Name         string `json:"name"`
+	BaseURL      string `json:"base_url"`
+	SpecContent  string `json:"spec_content"`
+	SpecURL      string `json:"spec_url"`
+	ConnectorID  string `json:"connector_id"`
+	APIPath      string `json:"api_path"`
+	Method       string `json:"method"`
+	Description  string `json:"description"`
+	InputSchema  string `json:"input_schema"`
+	Status       string `json:"status"`
+	RiskLevel    string `json:"risk_level"`
+	EnabledValue *bool  `json:"enabled"`
 }
 
-// ImportOpenAPI 导入OpenAPI文档并自动生成MCP工具
+// ImportOpenAPI 导入OpenAPI文档或单个RESTful API并自动生成MCP工具
 func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
@@ -351,21 +390,53 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 		return
 	}
 
-	// 解析OpenAPI规范
-	spec, err := openapi.ParseOpenAPISpec([]byte(req.SpecContent))
+	// 单接口 RESTful API 导入：复用已有连接器，直接生成 MCP 工具。
+	if req.ConnectorID != "" || req.APIPath != "" || req.Method != "" {
+		restReq, err := normalizeRESTImportRequest(req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var connector models.Connector
+		if err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ? AND tenant_id = ?", restReq.ConnectorID, tenantID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "连接器不存在"})
+			return
+		}
+		_, err = database.DB.Exec(`INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, status, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, uuid.New().String(), tenantID, restReq.ConnectorID, restReq.Name, restReq.Description, restReq.InputSchema, restReq.Method, restReq.APIPath, restReq.RiskLevel, restReq.Status, restReq.Enabled)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建RESTful MCP工具失败", "details": err.Error()})
+			return
+		}
+		database.DB.Exec("UPDATE connectors SET tools_count = (SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?), last_sync_at = NOW() WHERE id = ?", restReq.ConnectorID, restReq.ConnectorID)
+		c.JSON(http.StatusOK, gin.H{"message": "RESTful API import completed", "connector_id": restReq.ConnectorID, "total": 1, "created": 1})
+		return
+	}
+
+	// OpenAPI 文档导入：支持 spec_content 或 spec_url。
+	var spec *openapi.OpenAPISpec
+	var err error
+	if req.SpecContent != "" {
+		spec, err = openapi.ParseOpenAPISpec([]byte(req.SpecContent))
+	} else if req.SpecURL != "" {
+		spec, err = openapi.FetchOpenAPISpec(req.SpecURL)
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "spec_content 或 spec_url 为必填项"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OpenAPI spec", "details": err.Error()})
 		return
 	}
 
-	// 创建连接器
 	connectorID := uuid.New().String()
-	_, err = database.DB.NamedExec(`INSERT INTO connectors (id, tenant_id, name, type, base_url, spec_content, status, created_at, updated_at)
-		VALUES (:id, :tenant_id, :name, 'openapi', :base_url, :spec_content, 'active', NOW(), NOW())`, map[string]interface{}{
+	_, err = database.DB.NamedExec(`INSERT INTO connectors (id, tenant_id, name, type, base_url, spec_url, spec_content, status, created_at, updated_at)
+		VALUES (:id, :tenant_id, :name, 'openapi', :base_url, :spec_url, :spec_content, 'active', NOW(), NOW())`, map[string]interface{}{
 		"id":           connectorID,
 		"tenant_id":    tenantID,
 		"name":         req.Name,
 		"base_url":     req.BaseURL,
+		"spec_url":     req.SpecURL,
 		"spec_content": req.SpecContent,
 	})
 	if err != nil {
@@ -374,42 +445,19 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 		return
 	}
 
-	// 转换为MCP工具
 	tools := openapi.ConvertToMCPTools(spec)
-
-	// 保存工具到数据库
 	created := 0
 	for _, tool := range tools {
 		inputSchemaJSON, _ := json.Marshal(tool.InputSchema)
-
-		newTool := models.MCPTool{
-			ID:            uuid.New().String(),
-			TenantID:      tenantID,
-			ConnectorID:   connectorID,
-			Name:          tool.Name,
-			Description:   &tool.Description,
-			InputSchema:   ptrString(string(inputSchemaJSON)),
-			BackendMethod: &tool.Method,
-			BackendPath:   &tool.Path,
-			RiskLevel:     "low",
-			Enabled:       true,
-		}
-		_, err = database.DB.NamedExec(`INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, enabled, created_at)
-			VALUES (:id, :tenant_id, :connector_id, :name, :description, :input_schema, :backend_method, :backend_path, :risk_level, :enabled, NOW())`, newTool)
+		_, err = database.DB.Exec(`INSERT INTO mcp_tools (id, tenant_id, connector_id, name, description, input_schema, backend_method, backend_path, risk_level, status, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'low', 'published', true, NOW(), NOW())`, uuid.New().String(), tenantID, connectorID, tool.Name, tool.Description, string(inputSchemaJSON), tool.Method, tool.Path)
 		if err == nil {
 			created++
 		}
 	}
 
-	// 更新连接器工具数量
 	database.DB.Exec("UPDATE connectors SET tools_count = ?, last_sync_at = NOW() WHERE id = ?", created, connectorID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":      "Import completed",
-		"connector_id": connectorID,
-		"total":        len(tools),
-		"created":      created,
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Import completed", "connector_id": connectorID, "total": len(tools), "created": created})
 }
 
 // DiscoverMCPTools 从连接器的MCP Server发现工具

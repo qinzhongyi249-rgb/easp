@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tabs, Tag, Select, Dropdown } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined, TeamOutlined, MoreOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
@@ -7,25 +7,12 @@ import { roleApi } from '../api/role';
 import { mcpToolApi } from '../api/mcpTool';
 import { skillApi } from '../api/skill';
 import { useAuth } from '../contexts/AuthContext';
+import { FEATURE_MENU_PERMISSIONS } from '../config/menuPermissions';
 
 const { Title, Text } = Typography;
 interface LayoutContext { currentTenant: string; }
 
-// 与 MainLayout.tsx 中 hasTool(...) 控制的菜单权限保持一致。
-// 不包含：dashboard（所有登录用户可见）、tenants（仅系统级 isAdmin）、assistant（所有登录用户可见）。
-const TOOL_OPTIONS = [
-  { label: '用户管理', value: 'users', desc: '管理租户下的用户' },
-  { label: '角色管理', value: 'roles', desc: '管理租户下的角色' },
-  { label: '连接器管理', value: 'connectors', desc: '创建、编辑、删除连接器' },
-  { label: 'MCP工具管理', value: 'mcp-tools', desc: '管理MCP工具配置' },
-  { label: '技能管理', value: 'skills', desc: '创建和执行技能' },
-  { label: '记忆管理', value: 'memory', desc: '管理记忆池和向量记忆' },
-  { label: '模型配置', value: 'model-config', desc: '配置AI模型和提供商' },
-  { label: 'SSO配置', value: 'sso-config', desc: '配置单点登录' },
-  { label: '用量分析', value: 'usage-analytics', desc: '查看租户调用量、Token消耗和配额使用情况' },
-  { label: '审计日志', value: 'audit-logs', desc: '查看操作审计日志' },
-  { label: 'API Key', value: 'api-keys', desc: '管理嵌入式聊天/API访问密钥' },
-];
+const TOOL_OPTIONS = FEATURE_MENU_PERMISSIONS;
 
 const DATA_SCOPE_OPTIONS = [
   { label: '全部数据', value: 'all', desc: '可访问租户下所有数据' },
@@ -56,8 +43,8 @@ const Roles: React.FC = () => {
   const isMobile = window.innerWidth < 768;
 
   // MCP工具和技能列表（用于权限选择）
-  const [mcpTools, setMcpTools] = useState<{id: string; name: string; description?: string}[]>([]);
-  const [skills, setSkills] = useState<{id: string; name: string; description?: string}[]>([]);
+  const [mcpTools, setMcpTools] = useState<{id: string; name: string; description?: string; status?: string; is_builtin?: boolean; locked?: boolean}[]>([]);
+  const [skills, setSkills] = useState<{id: string; name: string; description?: string; status?: string}[]>([]);
 
   const load = async () => {
     if (!currentTenant) return;
@@ -83,13 +70,13 @@ const Roles: React.FC = () => {
     if (!currentTenant) return;
     try {
       const [toolsRes, skillsRes] = await Promise.all([
-        mcpToolApi.list(currentTenant).catch(() => ({ data: [] })),
-        skillApi.list(currentTenant).catch(() => ({ data: [] })),
+        mcpToolApi.listUsable(currentTenant).catch(() => ({ data: [] })),
+        skillApi.listUsable(currentTenant).catch(() => ({ data: [] })),
       ]);
       const toolsData = Array.isArray(toolsRes.data) ? toolsRes.data : [];
       const skillsData = Array.isArray(skillsRes.data) ? skillsRes.data : [];
-      setMcpTools(toolsData.map((t: {id: string; name: string; description?: string}) => ({ id: t.id, name: t.name, description: t.description })));
-      setSkills(skillsData.map((s: {id: string; name: string; description?: string}) => ({ id: s.id, name: s.name, description: s.description })));
+      setMcpTools(toolsData.map((t: {id: string; name: string; description?: string; status?: string; is_builtin?: boolean; locked?: boolean}) => ({ id: t.id, name: t.name, description: t.description, status: t.status, is_builtin: t.is_builtin, locked: t.locked })));
+      setSkills(skillsData.map((s: {id: string; name: string; description?: string; status?: string}) => ({ id: s.id, name: s.name, description: s.description, status: s.status })));
     } catch {
       // 静默失败
     }
@@ -98,13 +85,34 @@ const Roles: React.FC = () => {
   useEffect(() => { load(); }, [currentTenant]);
   useEffect(() => { loadToolsAndSkills(); }, [currentTenant]);
 
+  const lockedBuiltinMCPToolIds = useMemo(
+    () => mcpTools.filter(t => t.is_builtin || t.locked).map(t => t.id),
+    [mcpTools]
+  );
+  const isTenantAdminRole = (role?: Role | null) => Boolean(role && !role.is_system && role.name === '管理员');
+  const isEditingTenantAdminRole = isTenantAdminRole(editing);
+  const mergeLockedBuiltinMCPTools = (ids?: string[], forceAdmin = false) => {
+    const merged = new Set([...(ids || []), ...((forceAdmin || isEditingTenantAdminRole) ? lockedBuiltinMCPToolIds : [])]);
+    return Array.from(merged).filter(Boolean);
+  };
+
+  useEffect(() => {
+    if (!modalOpen || !isEditingTenantAdminRole || lockedBuiltinMCPToolIds.length === 0) return;
+    const current = form.getFieldValue('allowed_mcp_tools') || [];
+    const merged = mergeLockedBuiltinMCPTools(current);
+    if (merged.length !== current.length) {
+      form.setFieldValue('allowed_mcp_tools', merged);
+    }
+  }, [modalOpen, isEditingTenantAdminRole, lockedBuiltinMCPToolIds, form]);
+
   const onOk = async () => {
     const values = await form.validateFields();
     if (values.tools && Array.isArray(values.tools)) {
       values.tools = JSON.stringify(values.tools);
     }
-    if (values.allowed_mcp_tools && Array.isArray(values.allowed_mcp_tools)) {
-      values.allowed_mcp_tools = JSON.stringify(values.allowed_mcp_tools);
+    if (isEditingTenantAdminRole || Array.isArray(values.allowed_mcp_tools)) {
+      const selectedMCPTools = Array.isArray(values.allowed_mcp_tools) ? values.allowed_mcp_tools : [];
+      values.allowed_mcp_tools = JSON.stringify(mergeLockedBuiltinMCPTools(selectedMCPTools));
     }
     if (values.allowed_skills && Array.isArray(values.allowed_skills)) {
       values.allowed_skills = JSON.stringify(values.allowed_skills);
@@ -137,7 +145,12 @@ const Roles: React.FC = () => {
       if (record.allowed_skills) {
         try { allowedSkills = JSON.parse(record.allowed_skills); } catch { allowedSkills = []; }
       }
-      form.setFieldsValue({ ...record, tools: toolsArray, allowed_mcp_tools: allowedMCPTools, allowed_skills: allowedSkills });
+      form.setFieldsValue({
+        ...record,
+        tools: toolsArray,
+        allowed_mcp_tools: isTenantAdminRole(record) ? mergeLockedBuiltinMCPTools(allowedMCPTools, true) : allowedMCPTools,
+        allowed_skills: allowedSkills,
+      });
       const preset = RATE_LIMIT_PRESETS.find(p => p.value === record.rate_limit);
       if (preset && preset.value) {
         setRateLimitMode(preset.value);
@@ -312,25 +325,37 @@ const Roles: React.FC = () => {
               allowClear
             />
           </Form.Item>
-          <Form.Item name="allowed_mcp_tools" label="MCP工具权限" extra="选择该角色可以使用的MCP工具。不选择表示无MCP工具权限，留空则无法使用任何MCP工具">
+          <Form.Item name="allowed_mcp_tools" label="MCP工具权限" extra="仅可选择已启用且已发布的MCP工具；测试中/草稿/停用不会出现在这里，也不会被AI助手生产调用。">
             <Select
               mode="multiple"
               placeholder="选择允许使用的MCP工具"
-              options={mcpTools.map(t => ({
-                label: (
-                  <div>
-                    <div>{t.name}</div>
-                    {t.description && <Text type="secondary" style={{ fontSize: 12 }}>{t.description}</Text>}
-                  </div>
-                ),
-                value: t.id,
-              }))}
+              options={mcpTools.map(t => {
+                const isLockedBuiltin = Boolean(t.is_builtin || t.locked);
+                return {
+                  label: (
+                    <div>
+                      <div>
+                        {t.name}
+                        {isLockedBuiltin && <Tag color="gold" style={{ marginLeft: 8 }}>内置锁定</Tag>}
+                      </div>
+                      {t.description && <Text type="secondary" style={{ fontSize: 12 }}>{t.description}</Text>}
+                    </div>
+                  ),
+                  value: t.id,
+                  disabled: isEditingTenantAdminRole && isLockedBuiltin,
+                };
+              })}
+              onChange={(selected: string[]) => {
+                if (isEditingTenantAdminRole) {
+                  form.setFieldValue('allowed_mcp_tools', mergeLockedBuiltinMCPTools(selected));
+                }
+              }}
               maxTagCount="responsive"
-              allowClear
+              allowClear={!isEditingTenantAdminRole}
               notFoundContent="暂无MCP工具"
             />
           </Form.Item>
-          <Form.Item name="allowed_skills" label="技能权限" extra="选择该角色可以执行的技能。不选择表示无技能权限，留空则无法使用任何技能">
+          <Form.Item name="allowed_skills" label="技能权限" extra="仅可选择已发布的技能；测试中/草稿/停用不会出现在这里，也不会被AI助手生产调用。">
             <Select
               mode="multiple"
               placeholder="选择允许使用的技能"

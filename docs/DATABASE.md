@@ -5,11 +5,11 @@
 ## 数据库信息
 
 ```
-Host: rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei.rds.aliyuncs.com
+Host: <mysql-host>
 Port: 3306
-User: easp_dev
-Password: Easp_dev123
-Database: easp_dev
+User: <mysql-user>
+Password: <mysql-password>
+Database: easp
 Charset: utf8mb4
 ```
 
@@ -48,10 +48,12 @@ CREATE TABLE tenants (
 CREATE TABLE users (
     id VARCHAR(36) PRIMARY KEY,
     tenant_id VARCHAR(36) NOT NULL,
-    email VARCHAR(100) NOT NULL UNIQUE,
+    email VARCHAR(100),
+    email_unique_key VARCHAR(255) COMMENT '租户内邮箱唯一键',
     display_name VARCHAR(255),
     avatar TEXT,
     phone VARCHAR(50),
+    phone_unique_key VARCHAR(255) COMMENT '租户内手机号唯一键',
     status VARCHAR(50) NOT NULL,
     password_hash VARCHAR(255),
     sso_provider VARCHAR(50),
@@ -64,6 +66,10 @@ CREATE TABLE users (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_tenant_id (tenant_id),
+    INDEX idx_users_email (email),
+    INDEX idx_users_phone (phone),
+    UNIQUE KEY uk_users_tenant_email (email_unique_key),
+    UNIQUE KEY uk_users_tenant_phone (phone_unique_key),
     INDEX idx_sso_provider (sso_provider),
     INDEX idx_deleted_at (deleted_at)
 );
@@ -72,7 +78,9 @@ CREATE TABLE users (
 **字段说明**:
 - `id`: 用户唯一标识 (UUID)
 - `tenant_id`: 所属租户ID
-- `email`: 邮箱 (唯一)
+- `email`: 邮箱（租户内唯一，可与手机号二选一注册）
+- `phone`: 手机号（租户内唯一，可与邮箱二选一注册）
+- `email_unique_key`/`phone_unique_key`: 由后端写入 `tenant_id:邮箱/手机号`，空邮箱/空手机号保持 NULL，用于保证租户内唯一且允许跨租户同账号。
 - `display_name`: 显示名称
 - `password_hash`: 密码哈希
 - `sso_provider`: SSO提供商 (wechat/dingtalk/feishu)
@@ -380,7 +388,57 @@ CREATE TABLE model_configs (
 
 ---
 
-### 15. tenant_sso_configs (租户SSO配置表) ✅ 新增
+### 15. assistant_conversations (AI助手会话表) ✅ 新增
+
+```sql
+CREATE TABLE assistant_conversations (
+    id VARCHAR(36) PRIMARY KEY,
+    tenant_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    title VARCHAR(255) NOT NULL DEFAULT '',
+    page_context JSON,
+    message_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_tenant_user_updated (tenant_id, user_id, updated_at),
+    INDEX idx_user_updated (user_id, updated_at)
+);
+```
+
+**用途**:
+- 保存 AI 助手会话元数据与最近页面上下文。
+- `/api/v1/tenants/:tenantId/chat` 返回 SSE `conversation` 事件，前端持久化 `conversation_id`。
+- 后端按 `tenant_id + user_id + conversation_id` 校验会话归属，避免跨租户/跨用户读取。
+
+---
+
+### 16. session_memories (AI助手会话消息/短期记忆表) ✅ 新增
+
+```sql
+CREATE TABLE session_memories (
+    id VARCHAR(36) PRIMARY KEY,
+    tenant_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    session_id VARCHAR(36) NOT NULL,
+    role VARCHAR(20) NOT NULL COMMENT 'user/assistant/system',
+    content TEXT NOT NULL,
+    embedding LONGBLOB COMMENT '向量嵌入',
+    token_count INT COMMENT 'Token数量',
+    entity_ids JSON COMMENT '提到的实体ID列表',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_session (session_id),
+    INDEX idx_tenant_user (tenant_id, user_id)
+);
+```
+
+**用途**:
+- `session_id` 对应 `assistant_conversations.id`。
+- Chat 请求只需要传本轮用户消息；后端加载最近历史拼入模型上下文，避免前端重复注入历史。
+- 悬浮助手与 `/assistant` 页面使用不同本地 key 保存各自 `conversation_id`。
+
+---
+
+### 17. tenant_sso_configs (租户SSO配置表) ✅ 新增
 
 ```sql
 CREATE TABLE tenant_sso_configs (
@@ -416,7 +474,7 @@ CREATE TABLE tenant_sso_configs (
 
 ---
 
-### 16. 其他表
+### 18. 其他表
 
 - `circuit_breaker_states`: 熔断器状态表
 - `abac_rules`: ABAC规则表
@@ -450,6 +508,10 @@ tenants (1) ─────┬───── (N) users
                  ├───── (N) model_providers
                  │           │
                  │           └─── (N) model_configs
+                 │
+                 ├───── (N) assistant_conversations
+                 │           │
+                 │           └─── (N) session_memories
                  │
                  ├───── (1) tenant_sso_configs
                  │
@@ -494,6 +556,8 @@ users (N) ──────── (N) roles  [通过 user_roles 关联]
 - `audit_logs.tenant_id` → `tenants.id`
 - `model_providers.tenant_id` → `tenants.id`
 - `model_configs.provider_id` → `model_providers.id`
+- `assistant_conversations.tenant_id/user_id` → `tenants.id/users.id`（代码级归属校验）
+- `session_memories.session_id` → `assistant_conversations.id`（代码级关联）
 - `tenant_sso_configs.tenant_id` → `tenants.id`
 
 ### 唯一约束

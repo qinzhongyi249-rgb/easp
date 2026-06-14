@@ -11,6 +11,10 @@ export interface Connector {
   headers?: string; // JSON: 自定义HTTP头
   auth_type?: string;
   auth_config?: string;
+  credential_mode?: 'static' | 'user_token' | 'none';
+  user_token_header?: string;
+  user_token_prefix?: string;
+  user_token_required_sso?: boolean;
   openapi_spec?: string;
   status: string;
   tools_count?: number;

@@ -55,6 +55,7 @@ systemctl start|stop|restart nginx
 | [TODO.md](docs/TODO.md) | 待办任务和开发计划 |
 | [DATABASE.md](docs/DATABASE.md) | 数据库设计文档 |
 | [CONFIG.md](docs/CONFIG.md) | 项目配置文档 |
+| [PRIVATE_DEPLOYMENT.md](docs/PRIVATE_DEPLOYMENT.md) | 私有化部署手册：硬件要求、配置文件、部署步骤、运维验收 |
 
 ## 端口配置
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/models"
+	skillpkg "github.com/easp-platform/easp/internal/skill"
 	"github.com/google/uuid"
 )
 
@@ -17,6 +18,14 @@ func NewSkillRepository() *SkillRepository {
 
 func (r *SkillRepository) Create(skill *models.Skill) error {
 	skill.ID = uuid.New().String()
+	if skill.Status == "" {
+		skill.Status = skillpkg.SkillStatusDraft
+	} else {
+		skill.Status = skillpkg.NormalizeSkillStatus(skill.Status)
+	}
+	if skill.Version == "" {
+		skill.Version = "1.0.0"
+	}
 	skill.CreatedAt = time.Now()
 	skill.UpdatedAt = time.Now()
 
@@ -56,7 +65,14 @@ func (r *SkillRepository) ListByStatus(tenantID, status string) ([]models.Skill,
 	return skills, err
 }
 
+func (r *SkillRepository) ListUsable(tenantID string) ([]models.Skill, error) {
+	var skills []models.Skill
+	err := database.DB.Select(&skills, "SELECT * FROM skills WHERE tenant_id = ? AND status IN ('published', 'active') ORDER BY name", tenantID)
+	return skills, err
+}
+
 func (r *SkillRepository) Update(skill *models.Skill) error {
+	skill.Status = skillpkg.NormalizeSkillStatus(skill.Status)
 	skill.UpdatedAt = time.Now()
 	query := `UPDATE skills SET name=:name, description=:description, category=:category, version=:version, tags=:tags, triggers=:triggers,
 			  input_schema=:input_schema, output_schema=:output_schema, steps=:steps, permission_topology=:permission_topology, status=:status, updated_at=:updated_at WHERE id=:id`

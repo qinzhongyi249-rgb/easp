@@ -14,6 +14,7 @@ import (
 	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/repositories"
+	ssoStore "github.com/easp-platform/easp/internal/sso"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -50,19 +51,19 @@ func (h *SSOHandler) SaveConfig(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
 	var req struct {
-		Enabled           bool    `json:"enabled"`
-		LoginURL          string  `json:"login_url" binding:"required"`
-		LoginMethod       string  `json:"login_method"`
-		LoginHeaders      string  `json:"login_headers"`
-		LoginBodyTemplate string  `json:"login_body_template"`
-		UserInfoURL       string  `json:"user_info_url"`
-		UserInfoMethod    string  `json:"user_info_method"`
-		UserInfoHeaders   string  `json:"user_info_headers"`
-		ResponseMapping   string  `json:"response_mapping"`
-		CallbackURL       string  `json:"callback_url"`
-		SyncUserOnLogin   bool    `json:"sync_user_on_login"`
-		SyncURL           string  `json:"sync_url"`
-		SyncMethod        string  `json:"sync_method"`
+		Enabled           bool   `json:"enabled"`
+		LoginURL          string `json:"login_url" binding:"required"`
+		LoginMethod       string `json:"login_method"`
+		LoginHeaders      string `json:"login_headers"`
+		LoginBodyTemplate string `json:"login_body_template"`
+		UserInfoURL       string `json:"user_info_url"`
+		UserInfoMethod    string `json:"user_info_method"`
+		UserInfoHeaders   string `json:"user_info_headers"`
+		ResponseMapping   string `json:"response_mapping"`
+		CallbackURL       string `json:"callback_url"`
+		SyncUserOnLogin   bool   `json:"sync_user_on_login"`
+		SyncURL           string `json:"sync_url"`
+		SyncMethod        string `json:"sync_method"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -217,6 +218,11 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 		*user.LastLoginAt = time.Now()
 		user.LoginCount++
 		repositories.NewUserRepository().Update(user)
+		if token := userInfo["token"]; token != "" {
+			if err := ssoStore.SaveUserToken(tenantID, user.ID, token); err != nil {
+				log.Printf("Failed to save user SSO token: %v", err)
+			}
+		}
 
 		callbackURL := ""
 		if config.CallbackURL != nil {
@@ -238,9 +244,15 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 	} else {
 		// ===== 标准登录（SSO未开启） =====
 		userRepo := repositories.NewUserRepository()
-		user, err := userRepo.GetByEmail(req.Username)
+		identifier := NormalizeLoginIdentifier(req.Username)
+		users, err := userRepo.ListByIdentifier(identifier)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
+			return
+		}
+		user, err := SelectLoginUser(users, tenantID)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
 			return
 		}
 
@@ -251,7 +263,7 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 		}
 
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
 			return
 		}
 
@@ -498,8 +510,8 @@ func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.Us
 		email = fmt.Sprintf("%s@sso.local", userInfo["user_id"])
 	}
 
-	// 尝试查找现有用户
-	user, _ := userRepo.GetByEmail(email)
+	// 尝试查找当前租户现有用户
+	user, _ := userRepo.GetByTenantAndEmail(tenantID, email)
 	if user != nil {
 		// 更新用户信息
 		if userInfo["display_name"] != "" {
@@ -515,15 +527,14 @@ func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.Us
 
 	// 创建新用户
 	user = &models.User{
-		ID:           uuid.New().String(),
-		TenantID:     tenantID,
-		Email:        email,
-		DisplayName:  userInfo["display_name"],
-		Status:       "active",
-		SSOProvider:  "tenant_sso",
-		SSOUserID:    userInfo["user_id"],
-		SSOLinkedAt:  &time.Time{},
-		
+		ID:          uuid.New().String(),
+		TenantID:    tenantID,
+		Email:       email,
+		DisplayName: userInfo["display_name"],
+		Status:      "active",
+		SSOProvider: "tenant_sso",
+		SSOUserID:   userInfo["user_id"],
+		SSOLinkedAt: &time.Time{},
 	}
 	*user.SSOLinkedAt = time.Now()
 

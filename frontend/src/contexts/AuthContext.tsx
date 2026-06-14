@@ -5,7 +5,7 @@ import { authApi } from '../api/auth';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string, tenantId?: string) => Promise<void>;
   logout: () => void;
   reloadUser: () => Promise<void>;
   isAuthenticated: boolean;
@@ -40,8 +40,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadUser();
   }, [loadUser]);
 
-  const login = async (email: string, password: string) => {
-    const res = await authApi.login({ email, password });
+  const login = async (identifier: string, password: string, tenantId?: string) => {
+    const field = identifier.includes('@') ? 'email' : 'phone';
+    const res = await authApi.login({ [field]: identifier, password, tenant_id: tenantId });
     const data = res.data as { user: User; tokens: { access_token: string; refresh_token: string } };
     localStorage.setItem('access_token', data.tokens.access_token);
     localStorage.setItem('refresh_token', data.tokens.refresh_token);

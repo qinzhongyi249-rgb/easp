@@ -24,6 +24,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Tenant } from '../api/tenant';
 import { tenantApi } from '../api/tenant';
 import FloatingAssistant from '../components/FloatingAssistant';
+import { FEATURE_MENU_PERMISSIONS } from '../config/menuPermissions';
 
 const { Header, Sider, Content } = Layout;
 
@@ -76,21 +77,27 @@ const MainLayout: React.FC = () => {
 
   const hasTool = (tool: string) => isAdmin || tools.includes('*') || tools.includes(tool);
 
+  const menuIconMap: Record<string, React.ReactNode> = {
+    users: <UserOutlined />,
+    roles: <SafetyCertificateOutlined />,
+    connectors: <ApiOutlined />,
+    'mcp-tools': <ToolOutlined />,
+    skills: <BulbOutlined />,
+    memory: <DatabaseOutlined />,
+    'model-config': <SettingOutlined />,
+    'sso-config': <KeyOutlined />,
+    assistant: <RobotOutlined />,
+    'usage-analytics': <BarChartOutlined />,
+    'audit-logs': <FileTextOutlined />,
+    'api-keys': <KeyOutlined />,
+  };
+
   const menuItems = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-    ...(hasTool('users') ? [{ key: '/users', icon: <UserOutlined />, label: '用户管理' }] : []),
-    ...(hasTool('roles') ? [{ key: '/roles', icon: <SafetyCertificateOutlined />, label: '角色管理' }] : []),
     ...(isAdmin ? [{ key: '/tenants', icon: <TeamOutlined />, label: '租户管理' }] : []),
-    ...(hasTool('connectors') ? [{ key: '/connectors', icon: <ApiOutlined />, label: '连接器' }] : []),
-    ...(hasTool('mcp-tools') ? [{ key: '/mcp-tools', icon: <ToolOutlined />, label: 'MCP工具' }] : []),
-    ...(hasTool('skills') ? [{ key: '/skills', icon: <BulbOutlined />, label: '技能管理' }] : []),
-    ...(hasTool('memory') ? [{ key: '/memory', icon: <DatabaseOutlined />, label: '记忆管理' }] : []),
-    ...(hasTool('model-config') ? [{ key: '/model-config', icon: <SettingOutlined />, label: '模型配置' }] : []),
-    ...(hasTool('sso-config') ? [{ key: '/sso-config', icon: <KeyOutlined />, label: 'SSO配置' }] : []),
-    { key: '/assistant', icon: <RobotOutlined />, label: 'AI 助手' },
-    ...(hasTool('usage-analytics') ? [{ key: '/usage-analytics', icon: <BarChartOutlined />, label: '用量分析' }] : []),
-    ...(hasTool('audit-logs') ? [{ key: '/audit-logs', icon: <FileTextOutlined />, label: '审计日志' }] : []),
-    ...(hasTool('api-keys') ? [{ key: '/api-keys', icon: <KeyOutlined />, label: 'API Key' }] : []),
+    ...FEATURE_MENU_PERMISSIONS
+      .filter(item => hasTool(item.value))
+      .map(item => ({ key: item.path, icon: menuIconMap[item.value], label: item.label })),
   ];
 
   const userMenuItems = [

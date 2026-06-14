@@ -61,9 +61,9 @@ func (s *MCPServer) HandleSSE(c *gin.Context) {
 	// 创建会话
 	sessionID := uuid.New().String()
 	session := &MCPSession{
-		ID:        sessionID,
-		TenantID:  tenantID,
-		CreatedAt: time.Now(),
+		ID:         sessionID,
+		TenantID:   tenantID,
+		CreatedAt:  time.Now(),
 		LastPingAt: time.Now(),
 	}
 	s.sessions.Store(sessionID, session)
@@ -125,7 +125,7 @@ func (s *MCPServer) processRequest(c *gin.Context, session *MCPSession, request 
 	s.mu.RUnlock()
 
 	if !exists {
-		c.JSON(http.StatusOK, NewJSONRPCError(request.ID, MethodNotFound, 
+		c.JSON(http.StatusOK, NewJSONRPCError(request.ID, MethodNotFound,
 			fmt.Sprintf("Method not found: %s", request.Method), nil))
 		return
 	}
@@ -134,7 +134,7 @@ func (s *MCPServer) processRequest(c *gin.Context, session *MCPSession, request 
 	ctx := c.Request.Context()
 	result, err := handler(ctx, session, request.Params)
 	if err != nil {
-		c.JSON(http.StatusOK, NewJSONRPCError(request.ID, InternalError, 
+		c.JSON(http.StatusOK, NewJSONRPCError(request.ID, InternalError,
 			err.Error(), nil))
 		return
 	}
@@ -189,7 +189,7 @@ func (s *MCPServer) handleToolsList(ctx context.Context, session *MCPSession, pa
 		Description *string `db:"description"`
 		InputSchema *string `db:"input_schema"`
 	}
-	err := database.DB.Select(&mcpTools, "SELECT name, description, input_schema FROM mcp_tools WHERE tenant_id = ? AND enabled = true ORDER BY name", tenantID)
+	err := database.DB.Select(&mcpTools, "SELECT name, description, input_schema FROM mcp_tools WHERE tenant_id = ? AND enabled = true AND status IN ('published', 'active') ORDER BY name", tenantID)
 	if err == nil {
 		for _, t := range mcpTools {
 			tool := Tool{Name: t.Name}
@@ -212,7 +212,7 @@ func (s *MCPServer) handleToolsList(ctx context.Context, session *MCPSession, pa
 		InputSchema *string `db:"input_schema"`
 		Steps       string  `db:"steps"`
 	}
-	err = database.DB.Select(&skills, "SELECT name, description, input_schema, steps FROM skills WHERE tenant_id = ? AND status = 'active' ORDER BY name", tenantID)
+	err = database.DB.Select(&skills, "SELECT name, description, input_schema, steps FROM skills WHERE tenant_id = ? AND status IN ('published', 'active') ORDER BY name", tenantID)
 	if err == nil {
 		for _, sk := range skills {
 			toolName := "skill_" + sk.Name
@@ -284,7 +284,7 @@ func (s *MCPServer) executeSkillByName(ctx context.Context, tenantID, skillName 
 		ID    string `db:"id"`
 		Steps string `db:"steps"`
 	}
-	err := database.DB.Get(&skillRecord, "SELECT id, steps FROM skills WHERE name = ? AND tenant_id = ? AND status = 'active'", skillName, tenantID)
+	err := database.DB.Get(&skillRecord, "SELECT id, steps FROM skills WHERE name = ? AND tenant_id = ? AND status IN ('published', 'active')", skillName, tenantID)
 	if err != nil {
 		return ToolCallResult{
 			Content: []Content{
@@ -321,6 +321,9 @@ func (s *MCPServer) executeSkillByName(ctx context.Context, tenantID, skillName 
 		var mcpTool models.MCPTool
 		if err := database.DB.Get(&mcpTool, "SELECT * FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", toolName, tenantID); err != nil {
 			return nil, fmt.Errorf("MCP tool '%s' not found", toolName)
+		}
+		if err := skill.CanExecuteMCPTool(mcpTool, skill.ExecutionModeProduction); err != nil {
+			return nil, err
 		}
 		var connector models.Connector
 		if err := database.DB.Get(&connector, "SELECT * FROM connectors WHERE id = ?", mcpTool.ConnectorID); err != nil {
@@ -373,7 +376,7 @@ func (s *MCPServer) executeMCPToolByName(ctx context.Context, tenantID, toolName
 		BackendMethod *string `db:"backend_method"`
 		BackendPath   *string `db:"backend_path"`
 	}
-	err := database.DB.Get(&tool, "SELECT id, connector_id, name, input_schema, backend_method, backend_path FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true", toolName, tenantID)
+	err := database.DB.Get(&tool, "SELECT id, connector_id, name, input_schema, backend_method, backend_path FROM mcp_tools WHERE name = ? AND tenant_id = ? AND enabled = true AND status IN ('published', 'active')", toolName, tenantID)
 	if err != nil {
 		return ToolCallResult{
 			Content: []Content{
@@ -423,6 +426,14 @@ func (s *MCPServer) executeMCPToolByName(ctx context.Context, tenantID, toolName
 		return ToolCallResult{
 			Content: []Content{
 				NewTextContent(fmt.Sprintf("MCP tool '%s' not found", toolName)),
+			},
+			IsError: true,
+		}, nil
+	}
+	if err := skill.CanExecuteMCPTool(mcpTool, skill.ExecutionModeProduction); err != nil {
+		return ToolCallResult{
+			Content: []Content{
+				NewTextContent(err.Error()),
 			},
 			IsError: true,
 		}, nil
