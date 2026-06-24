@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/easp-platform/easp/internal/auth"
+	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/repositories"
 	"github.com/gin-gonic/gin"
@@ -15,12 +17,14 @@ import (
 // RoleHandler 角色处理器
 type RoleHandler struct {
 	roleRepo     *repositories.RoleRepository
+	userRepo     *repositories.UserRepository
 	userRoleRepo *repositories.UserRoleRepository
 }
 
 func NewRoleHandler() *RoleHandler {
 	return &RoleHandler{
 		roleRepo:     repositories.NewRoleRepository(),
+		userRepo:     repositories.NewUserRepository(),
 		userRoleRepo: repositories.NewUserRoleRepository(),
 	}
 }
@@ -111,7 +115,7 @@ func (h *RoleHandler) GetRole(c *gin.Context) {
 func (h *RoleHandler) ListRoles(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
-	// 获取租户级角色
+	// 获取租户级角色。租户管理员只能看到/分配租户级角色，不能看到系统级超级管理员角色。
 	roles, err := h.roleRepo.ListByTenant(tenantID)
 	if err != nil {
 		log.Printf("Failed to list roles: %v", err)
@@ -119,13 +123,49 @@ func (h *RoleHandler) ListRoles(c *gin.Context) {
 		return
 	}
 
-	// 获取系统级角色（只读参考）
-	systemRoles, _ := h.roleRepo.ListSystem()
-
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"tenant_roles": roles,
-		"system_roles": systemRoles,
-	})
+		"system_roles": []models.Role{},
+	}
+
+	if currentUserIsSystemAdmin(c) {
+		// 系统级角色只给系统管理员作为只读参考；普通租户管理员不返回，避免前端误用于分配。
+		systemRoles, err := h.roleRepo.ListSystem()
+		if err != nil {
+			log.Printf("Failed to list system roles: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list system roles"})
+			return
+		}
+		response["system_roles"] = systemRoles
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func currentUserIsSystemAdmin(c *gin.Context) bool {
+	roleIDs, exists := c.Get(middleware.ContextRoleIDs)
+	if !exists || roleIDs == nil {
+		return false
+	}
+
+	var roles []string
+	switch v := roleIDs.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(v), &roles); err != nil {
+			return false
+		}
+	case []string:
+		roles = v
+	default:
+		return false
+	}
+
+	for _, roleID := range roles {
+		if auth.IsAdminRole(roleID) {
+			return true
+		}
+	}
+	return false
 }
 
 // ListSystemRoles 列出系统级角色（仅系统管理员可访问）
@@ -233,6 +273,30 @@ func (h *RoleHandler) AssignRole(c *gin.Context) {
 	var req AssignRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	role, err := h.roleRepo.GetByID(req.RoleID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Role not found"})
+		return
+	}
+	targetUser, err := h.userRepo.GetByID(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	if role.IsSystem {
+		if !currentUserIsSystemAdmin(c) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "SYSTEM_ROLE_NOT_ASSIGNABLE", "message": "租户管理员不能分配系统级角色"})
+			return
+		}
+	} else if role.TenantID != targetUser.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "ROLE_TENANT_MISMATCH", "message": "不能分配其他租户的角色"})
+		return
+	}
+	if requestTenantID, ok := c.Get(middleware.ContextTenantID); ok && !currentUserIsSystemAdmin(c) && requestTenantID.(string) != targetUser.TenantID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "USER_TENANT_MISMATCH", "message": "不能给其他租户用户分配角色"})
 		return
 	}
 

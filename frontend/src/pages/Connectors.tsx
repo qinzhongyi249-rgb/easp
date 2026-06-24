@@ -1,12 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider, Switch, Alert } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider, Switch, Alert, Card, Statistic, Steps, Empty, Drawer, Descriptions } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined, CloudServerOutlined, CodeOutlined, SafetyCertificateOutlined, ToolOutlined, LockOutlined, EyeOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Connector } from '../api/connector';
 import { connectorApi } from '../api/connector';
 
-const { Title } = Typography;
+const { Title, Text, Paragraph } = Typography;
 interface LayoutContext { currentTenant: string; }
+
+const fmtTime = (value?: string) => value ? new Date(value).toLocaleString() : '-';
+const prettyJson = (value?: string) => {
+  if (!value) return '无';
+  try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+};
 
 const Connectors: React.FC = () => {
   const { currentTenant } = useOutletContext<LayoutContext>();
@@ -15,6 +21,8 @@ const Connectors: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Connector | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailConnector, setDetailConnector] = useState<Connector | null>(null);
   const [form] = Form.useForm();
   const isMobile = window.innerWidth < 768;
 
@@ -32,8 +40,22 @@ const Connectors: React.FC = () => {
 
   useEffect(() => { load(); }, [currentTenant]);
 
+  const isLockedBuiltinConnector = (connector?: Connector | null) => Boolean(connector?.is_builtin || connector?.locked || connector?.type === 'builtin');
+  const openDetail = (connector: Connector) => { setDetailConnector(connector); setDetailOpen(true); };
+  const connectorState = (connector: Connector) => {
+    if (isLockedBuiltinConnector(connector)) return { label: '内置锁定', type: 'info' as const, desc: '系统内置接入源不可编辑或删除，后端 API 会强制拦截。' };
+    if (connector.status !== 'active') return { label: '未启用/异常', type: 'warning' as const, desc: '接入源不是 active，相关工具可能不可用于生产调用。' };
+    if (connector.type === 'mcp' && !connector.mcp_server_url) return { label: '缺 MCP 地址', type: 'warning' as const, desc: 'MCP 接入源缺少 Server 地址，无法自动发现工具。' };
+    if ((connector.type === 'rest' || connector.type === 'openapi') && !connector.base_url) return { label: '缺基础 URL', type: 'warning' as const, desc: 'REST/OpenAPI 接入源缺少基础 URL，导入工具后可能无法调用。' };
+    return { label: '可治理', type: 'success' as const, desc: '接入源状态正常，可继续导入工具并进入角色授权。' };
+  };
+
   // 打开编辑弹窗时，解析 headers JSON 为 KV 数组
   const openModal = useCallback((record?: Connector) => {
+    if (record && isLockedBuiltinConnector(record)) {
+      message.warning('内置锁定接入源不可编辑');
+      return;
+    }
     if (record) {
       setEditing(record);
       // 解析 headers JSON → KV 数组
@@ -78,7 +100,7 @@ const Connectors: React.FC = () => {
       });
     }
     setModalOpen(true);
-  }, [form]);
+  }, [form, message]);
 
   const onOk = async () => {
     const values = await form.validateFields();
@@ -121,13 +143,73 @@ const Connectors: React.FC = () => {
     } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败'); }
   };
 
-  const onDelete = async (id: string) => {
-    try { await connectorApi.delete(currentTenant, id); message.success('删除成功'); load(); }
+  const onDelete = async (connector: Connector) => {
+    if (isLockedBuiltinConnector(connector)) {
+      message.warning('内置锁定接入源不可删除');
+      return;
+    }
+    try { await connectorApi.delete(currentTenant, connector.id); message.success('删除成功'); load(); }
     catch { message.error('删除失败'); }
   };
 
+  const credentialModeLabel = (mode?: string) => {
+    if (mode === 'user_token') return <Tag color="purple">用户 Token 透传</Tag>;
+    if (mode === 'none') return <Tag>无认证</Tag>;
+    return <Tag color="orange">静态凭据</Tag>;
+  };
+
+  const connectorSummary = {
+    total: connectors.length,
+    mcp: connectors.filter(item => item.type === 'mcp').length,
+    openapi: connectors.filter(item => item.type === 'openapi' || item.type === 'rest').length,
+    userToken: connectors.filter(item => item.credential_mode === 'user_token').length,
+    tools: connectors.reduce((sum, item) => sum + (item.tools_count || 0), 0),
+  };
+
+  const openConnectorWizard = (type: Connector['type'], credentialMode: Connector['credential_mode'] = 'static') => {
+    openModal();
+    setTimeout(() => {
+      form.setFieldsValue({
+        type,
+        credential_mode: credentialMode,
+        transport_type: type === 'mcp' ? 'streamable_http' : undefined,
+        auth_type: credentialMode === 'static' ? 'none' : undefined,
+        user_token_header: 'Authorization',
+        user_token_prefix: 'Bearer',
+        user_token_required_sso: true,
+      });
+    }, 0);
+  };
+
+  const renderConnectorCard = (connector: Connector) => (
+    <Card key={connector.id} size="small" style={{ height: '100%' }}>
+      <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+          <Text strong>{connector.name}</Text>
+          <Tag color={connector.status === 'active' ? 'green' : 'red'}>{connector.status}</Tag>
+        </Space>
+        <Space wrap>
+          <Tag color={connector.type === 'mcp' ? 'blue' : connector.type === 'builtin' ? 'purple' : 'cyan'}>{connector.type}</Tag>
+          {isLockedBuiltinConnector(connector) && <Tag color="purple" icon={<LockOutlined />}>内置锁定</Tag>}
+          {connector.transport_type && <Tag color={connector.transport_type === 'sse' ? 'geekblue' : 'green'}>{connector.transport_type}</Tag>}
+          {credentialModeLabel(connector.credential_mode || (connector.auth_type ? 'static' : 'none'))}
+        </Space>
+        <Paragraph ellipsis={{ rows: 1 }} style={{ marginBottom: 0 }} copyable={!!connector.base_url}>{connector.base_url || connector.mcp_server_url || '-'}</Paragraph>
+        <Text type="secondary">已导入工具：{connector.tools_count || 0}</Text>
+        <Space wrap>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(connector)}>详情</Button>
+          <Button size="small" icon={<EditOutlined />} disabled={isLockedBuiltinConnector(connector)} onClick={() => openModal(connector)}>配置</Button>
+          <Button size="small" icon={<ToolOutlined />} href="/mcp-tools">工具管理</Button>
+          <Popconfirm title="确认删除?" onConfirm={() => onDelete(connector)} disabled={isLockedBuiltinConnector(connector)}>
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={isLockedBuiltinConnector(connector)}>删除</Button>
+          </Popconfirm>
+        </Space>
+      </Space>
+    </Card>
+  );
+
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, record: Connector) => <Space wrap><Text>{v}</Text>{isLockedBuiltinConnector(record) && <Tag color="purple" icon={<LockOutlined />}>内置锁定</Tag>}</Space> },
     ...(!isMobile ? [
       { title: '类型', dataIndex: 'type', key: 'type', width: 80, render: (v: string) => <Tag>{v}</Tag> },
       { title: '传输', dataIndex: 'transport_type', key: 'transport_type', width: 100, render: (v: string) => v ? <Tag color={v === 'sse' ? 'blue' : 'green'}>{v}</Tag> : '-' },
@@ -136,19 +218,21 @@ const Connectors: React.FC = () => {
       { title: '认证', dataIndex: 'auth_type', key: 'auth_type', width: 80, render: (v: string) => v ? <Tag color="orange">{v}</Tag> : '-' },
     ] : []),
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={v === 'active' ? 'green' : 'red'}>{v}</Tag> },
-    { title: '操作', key: 'action', width: isMobile ? 60 : 150, render: (_: unknown, record: Connector) => (
+    { title: '操作', key: 'action', width: isMobile ? 60 : 210, render: (_: unknown, record: Connector) => (
       isMobile ? (
         <Dropdown menu={{ items: [
-          { key: 'edit', label: '编辑', icon: <EditOutlined />, onClick: () => openModal(record) },
-          { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) },
+          { key: 'detail', label: '详情', icon: <EyeOutlined />, onClick: () => openDetail(record) },
+          { key: 'edit', label: isLockedBuiltinConnector(record) ? '内置不可编辑' : '编辑', icon: <EditOutlined />, disabled: isLockedBuiltinConnector(record), onClick: () => openModal(record) },
+          { key: 'delete', label: isLockedBuiltinConnector(record) ? '内置不可删除' : '删除', icon: <DeleteOutlined />, danger: true, disabled: isLockedBuiltinConnector(record), onClick: () => onDelete(record) },
         ]}} trigger={['click']}>
           <Button type="text" icon={<MoreOutlined />} />
         </Dropdown>
       ) : (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openModal(record)}>编辑</Button>
-          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(record)}>详情</Button>
+          <Button size="small" icon={<EditOutlined />} disabled={isLockedBuiltinConnector(record)} onClick={() => openModal(record)}>编辑</Button>
+          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record)} disabled={isLockedBuiltinConnector(record)}>
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={isLockedBuiltinConnector(record)}>删除</Button>
           </Popconfirm>
         </Space>
       )
@@ -158,26 +242,149 @@ const Connectors: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
-        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><ApiOutlined /> 连接器</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>新建连接器</Button>
+        <div>
+          <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><ApiOutlined /> 业务工具接入</Title>
+          <Text type="secondary">把业务系统 API、OpenAPI 文档或 MCP Server 接入 EASP，再统一做权限、审计和助手调用。</Text>
+        </div>
+        <Space wrap>
+          <Button icon={<ToolOutlined />} href="/mcp-tools">查看工具</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectorWizard('mcp')}>新建接入</Button>
+        </Space>
       </div>
-      <Table 
-        dataSource={connectors} 
-        columns={columns} 
-        rowKey="id" 
-        loading={loading}
-        size={isMobile ? 'small' : 'middle'}
-        scroll={isMobile ? { x: 400 } : undefined}
-      />
-      <Modal 
-        title={editing ? '编辑连接器' : '新建连接器'} 
-        open={modalOpen} 
-        onOk={onOk} 
+
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="业务工具接入是增强能力：把内部 REST/OpenAPI/MCP 能力变成可治理工具。"
+          description="权限主体仍然是 EASP 内部用户；外部业务系统嵌入助手后，工具/Skill/MCP 的获取和执行链路都会按 EASP 角色与权限判断。内置/锁定接入源不可编辑或删除，后端 API 也会强制拦截。"
+        />
+
+        <Card>
+          <Steps
+            size="small"
+            direction={isMobile ? 'vertical' : 'horizontal'}
+            items={[
+              { title: '选择接入方式', description: 'MCP / OpenAPI / REST' },
+              { title: '配置凭据模式', description: '静态 / 用户Token / 无认证' },
+              { title: '导入工具', description: '发现或创建 MCP Tool' },
+              { title: '授权与审计', description: '角色授权后给助手使用' },
+            ]}
+          />
+        </Card>
+
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
+          <Card><Statistic title="接入源" value={connectorSummary.total} prefix={<CloudServerOutlined />} /></Card>
+          <Card><Statistic title="MCP Server" value={connectorSummary.mcp} prefix={<ApiOutlined />} /></Card>
+          <Card><Statistic title="REST/OpenAPI" value={connectorSummary.openapi} prefix={<CodeOutlined />} /></Card>
+          <Card><Statistic title="已导入工具" value={connectorSummary.tools} prefix={<ToolOutlined />} /></Card>
+        </div>
+
+        <Card title="选择接入方式" extra={<Text type="secondary">先建连接器，再去 MCP 工具页导入/授权</Text>}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+            <Card size="small" hoverable onClick={() => openConnectorWizard('mcp')}>
+              <Space direction="vertical">
+                <Space><ApiOutlined /><Text strong>MCP Server 接入</Text><Tag color="green">推荐</Tag></Space>
+                <Text type="secondary">接入 StreamableHTTP 或 SSE MCP Server，自动发现工具。</Text>
+                <Button size="small" type="primary">接入 MCP</Button>
+              </Space>
+            </Card>
+            <Card size="small" hoverable onClick={() => openConnectorWizard('openapi')}>
+              <Space direction="vertical">
+                <Space><CodeOutlined /><Text strong>OpenAPI 导入</Text><Tag color="blue">批量</Tag></Space>
+                <Text type="secondary">先创建 OpenAPI 连接器，再在 MCP 工具页导入接口为工具。</Text>
+                <Button size="small">接入 OpenAPI</Button>
+              </Space>
+            </Card>
+            <Card size="small" hoverable onClick={() => openConnectorWizard('rest', 'user_token')}>
+              <Space direction="vertical">
+                <Space><SafetyCertificateOutlined /><Text strong>业务用户 Token 透传</Text><Tag color="purple">SSO</Tag></Space>
+                <Text type="secondary">工具调用时透传当前 SSO 用户业务 Token，无 Token 明确失败。</Text>
+                <Button size="small">配置透传</Button>
+              </Space>
+            </Card>
+          </div>
+        </Card>
+
+        <Card title="接入源" extra={<Button icon={<PlusOutlined />} onClick={() => openConnectorWizard('mcp')}>新建接入源</Button>}>
+          {connectors.length === 0 ? <Empty description="暂无业务工具接入源，先选择上方接入方式创建" /> : (
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+              {connectors.map(renderConnectorCard)}
+            </div>
+          )}
+        </Card>
+
+        <Card title="接入源明细">
+          <Table
+            dataSource={connectors}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            size={isMobile ? 'small' : 'middle'}
+            scroll={isMobile ? { x: 400 } : undefined}
+          />
+        </Card>
+      </Space>
+      <Drawer
+        title={`接入源治理详情 — ${detailConnector?.name || ''}`}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        width={isMobile ? '100%' : 720}
+      >
+        {detailConnector && (() => {
+          const state = connectorState(detailConnector);
+          const mode = detailConnector.credential_mode || (detailConnector.auth_type ? 'static' : 'none');
+          return (
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <Alert type={state.type} showIcon message={state.label} description={state.desc} />
+              <Descriptions bordered size="small" column={isMobile ? 1 : 2}>
+                <Descriptions.Item label="接入源ID">{detailConnector.id}</Descriptions.Item>
+                <Descriptions.Item label="来源">{isLockedBuiltinConnector(detailConnector) ? <Tag color="purple" icon={<LockOutlined />}>系统内置</Tag> : <Tag>租户自定义</Tag>}</Descriptions.Item>
+                <Descriptions.Item label="名称">{detailConnector.name}</Descriptions.Item>
+                <Descriptions.Item label="类型"><Tag color={detailConnector.type === 'builtin' ? 'purple' : detailConnector.type === 'mcp' ? 'blue' : 'cyan'}>{detailConnector.type}</Tag></Descriptions.Item>
+                <Descriptions.Item label="状态"><Tag color={detailConnector.status === 'active' ? 'green' : 'red'}>{detailConnector.status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="锁定状态">{isLockedBuiltinConnector(detailConnector) ? <Tag color="purple">内置锁定</Tag> : <Tag>可编辑</Tag>}</Descriptions.Item>
+                <Descriptions.Item label="传输方式">{detailConnector.transport_type ? <Tag color={detailConnector.transport_type === 'sse' ? 'blue' : 'green'}>{detailConnector.transport_type}</Tag> : '-'}</Descriptions.Item>
+                <Descriptions.Item label="凭据模式">{credentialModeLabel(mode)}</Descriptions.Item>
+                <Descriptions.Item label="认证类型">{detailConnector.auth_type || '-'}</Descriptions.Item>
+                <Descriptions.Item label="已导入工具">{detailConnector.tools_count || 0}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{fmtTime(detailConnector.created_at)}</Descriptions.Item>
+                <Descriptions.Item label="更新时间">{fmtTime(detailConnector.updated_at)}</Descriptions.Item>
+                <Descriptions.Item label="基础URL" span={isMobile ? 1 : 2}>{detailConnector.base_url || '-'}</Descriptions.Item>
+                <Descriptions.Item label="MCP Server" span={isMobile ? 1 : 2}>{detailConnector.mcp_server_url || '-'}</Descriptions.Item>
+                {mode === 'user_token' && <Descriptions.Item label="用户 Token 透传" span={isMobile ? 1 : 2}>{detailConnector.user_token_header || 'Authorization'} {detailConnector.user_token_prefix || ''}；{detailConnector.user_token_required_sso === false ? '不强制 SSO Token' : '要求 SSO Token'}</Descriptions.Item>}
+              </Descriptions>
+              <Card size="small" title="自定义请求头">
+                <pre style={{ maxHeight: 180, overflow: 'auto', background: '#f5f5f5', padding: 12, borderRadius: 6 }}>{prettyJson(detailConnector.headers)}</pre>
+              </Card>
+              <Card size="small" title="治理建议">
+                <Space direction="vertical">
+                  <Text>1. 接入源只负责连接业务系统，真正暴露给助手的是 MCP Tool。</Text>
+                  <Text>2. 静态凭据只应保存在服务端；用户 Token 透传无 SSO Token 时应明确失败。</Text>
+                  <Text>3. 内置锁定接入源由系统治理链路保留，不可编辑或删除。</Text>
+                  <Text>4. 导入工具后，还需要发布、启用并在角色授权中分配，助手才可调用。</Text>
+                </Space>
+              </Card>
+            </Space>
+          );
+        })()}
+      </Drawer>
+      <Modal
+        title={editing ? '编辑业务工具接入源' : '新建业务工具接入源'}
+        open={modalOpen}
+        onOk={onOk}
         onCancel={() => setModalOpen(false)}
-        width={isMobile ? '95%' : 600}
+        width={isMobile ? '95%' : 760}
         destroyOnClose
       >
         <Form form={form} layout="vertical" initialValues={{ type: 'mcp', auth_type: 'none', credential_mode: 'static', user_token_header: 'Authorization', user_token_prefix: 'Bearer', user_token_required_sso: true, transport_type: 'streamable_http', headers_kv: [{ key: '', value: '' }] }}>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="接入源负责连接业务系统，真正暴露给助手的是 MCP 工具。"
+            description="创建后可到“工具管理”导入 OpenAPI/REST/MCP 工具，再通过角色权限决定谁能使用。"
+          />
           {/* 基本信息 */}
           <Form.Item name="name" label="连接器名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如: GitHub MCP / 企业数据服务" />

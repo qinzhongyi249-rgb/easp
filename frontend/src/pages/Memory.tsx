@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, Button, Modal, Form, Input, Typography, App, Tabs, Tag, Descriptions, Select, Switch, InputNumber, Space, Popconfirm, Dropdown, Card, Row, Col, Statistic, Alert, Progress, Divider, Tooltip, Empty } from 'antd';
+import { Table, Button, Modal, Form, Input, Typography, App, Tabs, Tag, Descriptions, Select, Switch, InputNumber, Space, Popconfirm, Dropdown, Card, Row, Col, Statistic, Alert, Progress, Divider, Tooltip, Empty, Drawer } from 'antd';
 import { PlusOutlined, DatabaseOutlined, UserOutlined, ApartmentOutlined, BulbOutlined, BarChartOutlined, EditOutlined, DeleteOutlined, MoreOutlined, SafetyCertificateOutlined, SearchOutlined, AuditOutlined, HddOutlined, SyncOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { MemoryPool, MemoryEntry, UserMemory, Entity, SkillMemory, MemoryStats, MemorySettings, MemoryAuditLog, MemoryScoreBreakdown } from '../api/memory';
@@ -49,6 +49,8 @@ const Memory: React.FC = () => {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [selectedMemory, setSelectedMemory] = useState<UserMemory | null>(null);
+  const [selectedAudit, setSelectedAudit] = useState<MemoryAuditLog | null>(null);
   const [editingPool, setEditingPool] = useState<MemoryPool | null>(null);
   const [activeTab, setActiveTab] = useState('governance');
   const [form] = Form.useForm();
@@ -60,9 +62,16 @@ const Memory: React.FC = () => {
     return map;
   }, [recallExplanations]);
 
-  const totalPoolTokens = useMemo(() => pools.reduce((sum, pool) => sum + (pool.max_tokens || 0), 0), [pools]);
   const archivedCount = useMemo(() => userMemories.filter((item) => item.status === 'archived').length, [userMemories]);
   const vectorIndexedCount = useMemo(() => userMemories.filter((item) => !!item.vector_indexed_at).length, [userMemories]);
+  const activeMemoryCount = useMemo(() => userMemories.filter((item) => (item.status || 'active') === 'active').length, [userMemories]);
+  const sourceStats = useMemo(() => userMemories.reduce<Record<string, number>>((acc, item) => {
+    const key = item.source || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {}), [userMemories]);
+  const topMemorySource = useMemo(() => Object.entries(sourceStats).sort((a, b) => b[1] - a[1])[0], [sourceStats]);
+  const vectorRate = userMemories.length ? Math.round((vectorIndexedCount / userMemories.length) * 100) : 0;
 
   const load = useCallback(async () => {
     if (!currentTenant) return;
@@ -243,6 +252,7 @@ const Memory: React.FC = () => {
       { title: '向量', dataIndex: 'vector_indexed_at', key: 'vector_indexed_at', width: 90, render: (v: string | null) => v ? <Tag color="green">已索引</Tag> : <Tag>未索引</Tag> },
     ] : []),
     { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: fmtTime },
+    { title: '详情', key: 'detail', width: 80, render: (_: unknown, record: UserMemory) => <Button size="small" onClick={() => setSelectedMemory(record)}>查看</Button> },
   ];
 
   const poolEntryColumns = [
@@ -310,6 +320,7 @@ const Memory: React.FC = () => {
       { title: '处理后预览', dataIndex: 'sanitized_preview', key: 'sanitized_preview', ellipsis: true, render: (v: string) => v || '-' },
     ] : []),
     { title: '时间', dataIndex: 'created_at', key: 'created_at', render: fmtTime },
+    { title: '详情', key: 'detail', width: 80, render: (_: unknown, record: MemoryAuditLog) => <Button size="small" onClick={() => setSelectedAudit(record)}>查看</Button> },
   ];
 
   const governanceView = (
@@ -317,14 +328,36 @@ const Memory: React.FC = () => {
       <Alert
         type="info"
         showIcon
-        message="记忆治理前端只做配置和展示"
-        description="敏感过滤、去重、混合检索、召回排序、容量归档仍由后端决策；页面用于开关配置、召回解释和审计验证。"
+        message="记忆治理工作台"
+        description="这里统一查看记忆池、长期记忆、向量索引、召回解释和治理审计。前端只做配置和展示；敏感过滤、去重、混合检索、召回排序、容量归档仍由后端决策。"
       />
       <Row gutter={[16, 16]}>
         <Col xs={12} lg={6}><Card><Statistic title="用户记忆" value={stats?.total_user_memories || 0} prefix={<UserOutlined />} /></Card></Col>
-        <Col xs={12} lg={6}><Card><Statistic title="向量已索引" value={vectorIndexedCount} prefix={<SyncOutlined />} /></Card></Col>
-        <Col xs={12} lg={6}><Card><Statistic title="已归档" value={archivedCount} prefix={<HddOutlined />} /></Card></Col>
-        <Col xs={12} lg={6}><Card><Statistic title="池 Token 上限" value={totalPoolTokens || 0} suffix={totalPoolTokens ? '' : '不限'} prefix={<DatabaseOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="活跃记忆" value={activeMemoryCount} prefix={<SafetyCertificateOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="向量索引率" value={vectorRate} suffix="%" prefix={<SyncOutlined />} /></Card></Col>
+        <Col xs={12} lg={6}><Card><Statistic title="记忆池" value={pools.length} prefix={<DatabaseOutlined />} /></Card></Col>
+      </Row>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <Card title="来源与状态" size="small">
+            <Space wrap>
+              <Tag color="blue">Top来源：{topMemorySource ? `${topMemorySource[0]} / ${topMemorySource[1]}` : '暂无'}</Tag>
+              <Tag color="green">active：{activeMemoryCount}</Tag>
+              <Tag color="orange">archived：{archivedCount}</Tag>
+              <Tag color="purple">vector：{vectorIndexedCount}/{userMemories.length}</Tag>
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="治理链路" size="small">
+            <Space wrap>
+              <Tag color={settings?.auto_extract_enabled ? 'green' : 'red'}>自动提取：{settings?.auto_extract_enabled ? '开' : '关'}</Tag>
+              <Tag color={settings?.sensitive_filter_enabled ? 'green' : 'red'}>敏感过滤：{settings?.sensitive_filter_enabled ? '开' : '关'}</Tag>
+              <Tag color={settings?.recall_enabled ? 'green' : 'red'}>召回注入：{settings?.recall_enabled ? '开' : '关'}</Tag>
+              <Tag color={settings?.hybrid_search_enabled ? 'green' : 'orange'}>检索：{settings?.hybrid_search_mode || '-'}</Tag>
+            </Space>
+          </Card>
+        </Col>
       </Row>
       <Card title={<Space><SafetyCertificateOutlined />治理配置</Space>} loading={loading && !settings}>
         {settings ? (
@@ -518,13 +551,70 @@ const Memory: React.FC = () => {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><DatabaseOutlined /> 记忆管理</Title>
+        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><DatabaseOutlined /> 记忆治理</Title>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-          管理记忆池、长期记忆、治理配置、召回解释和审计日志。
+          统一管理记忆池、长期记忆、来源状态、向量索引、召回解释和治理审计；核心提取、过滤、去重、召回策略由后端执行。
         </Paragraph>
       </div>
 
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+
+      <Drawer
+        title="长期记忆详情"
+        open={!!selectedMemory}
+        onClose={() => setSelectedMemory(null)}
+        width={isMobile ? '100%' : 620}
+      >
+        {selectedMemory && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type={(selectedMemory.status || 'active') === 'active' ? 'success' : 'warning'}
+              showIcon
+              message={`状态：${selectedMemory.status || 'active'} / 来源：${selectedMemory.source || 'unknown'}`}
+              description="长期记忆详情用于排查为什么会被召回、是否已向量化、是否可能需要归档或治理。"
+            />
+            <Descriptions bordered column={1} size="small" title="内容与归因">
+              <Descriptions.Item label="记忆ID">{selectedMemory.id}</Descriptions.Item>
+              <Descriptions.Item label="用户ID">{selectedMemory.user_id}</Descriptions.Item>
+              <Descriptions.Item label="记忆池ID">{selectedMemory.pool_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="类型"><Tag>{selectedMemory.type}</Tag></Descriptions.Item>
+              <Descriptions.Item label="来源"><Tag>{selectedMemory.source || 'unknown'}</Tag></Descriptions.Item>
+              <Descriptions.Item label="内容"><Paragraph copyable style={{ margin: 0 }}>{selectedMemory.content}</Paragraph></Descriptions.Item>
+              <Descriptions.Item label="Content Hash">{selectedMemory.content_hash || '-'}</Descriptions.Item>
+            </Descriptions>
+            <Descriptions bordered column={1} size="small" title="召回与向量状态">
+              <Descriptions.Item label="状态"><Tag color={statusColor[selectedMemory.status || 'active'] || 'default'}>{selectedMemory.status || 'active'}</Tag></Descriptions.Item>
+              <Descriptions.Item label="访问次数">{selectedMemory.access_count || 0}</Descriptions.Item>
+              <Descriptions.Item label="最近访问">{fmtTime(selectedMemory.last_accessed_at)}</Descriptions.Item>
+              <Descriptions.Item label="最近出现">{fmtTime(selectedMemory.last_seen_at)}</Descriptions.Item>
+              <Descriptions.Item label="向量索引">{selectedMemory.vector_indexed_at ? <Tag color="green">已索引</Tag> : <Tag color="orange">未索引/关键词兜底</Tag>}</Descriptions.Item>
+              <Descriptions.Item label="索引时间">{fmtTime(selectedMemory.vector_indexed_at)}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{fmtTime(selectedMemory.updated_at)}</Descriptions.Item>
+            </Descriptions>
+          </Space>
+        )}
+      </Drawer>
+
+      <Drawer
+        title="记忆治理审计详情"
+        open={!!selectedAudit}
+        onClose={() => setSelectedAudit(null)}
+        width={isMobile ? '100%' : 620}
+      >
+        {selectedAudit && (
+          <Descriptions bordered column={1} size="small">
+            <Descriptions.Item label="日志ID">{selectedAudit.id}</Descriptions.Item>
+            <Descriptions.Item label="动作"><Tag color={actionColor[selectedAudit.action] || 'default'}>{selectedAudit.action}</Tag></Descriptions.Item>
+            <Descriptions.Item label="来源"><Tag>{selectedAudit.source || '-'}</Tag></Descriptions.Item>
+            <Descriptions.Item label="用户ID">{selectedAudit.user_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label="记忆ID">{selectedAudit.memory_id || '-'}</Descriptions.Item>
+            <Descriptions.Item label="原因">{selectedAudit.reason || '-'}</Descriptions.Item>
+            <Descriptions.Item label="原始预览"><Paragraph copyable style={{ margin: 0 }}>{selectedAudit.original_preview || '-'}</Paragraph></Descriptions.Item>
+            <Descriptions.Item label="处理后预览"><Paragraph copyable style={{ margin: 0 }}>{selectedAudit.sanitized_preview || '-'}</Paragraph></Descriptions.Item>
+            <Descriptions.Item label="时间">{fmtTime(selectedAudit.created_at)}</Descriptions.Item>
+          </Descriptions>
+        )}
+      </Drawer>
 
       <Modal
         title={editingPool ? '编辑记忆池' : '新建记忆池'}

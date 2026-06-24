@@ -109,21 +109,25 @@ require (
 
 ## 七、环境变量
 
+生产服务通过 systemd `EnvironmentFile=/etc/easp/easp-server.env` 注入数据库配置。该文件包含敏感信息，权限应保持 `600 root:root`，不要提交到 Git。
+
 ```bash
-# 服务端口
+# /etc/easp/easp-server.env
+EASP_DB_HOST=<mysql-host>
+EASP_DB_PORT=3306
+EASP_DB_USER=<mysql-user>
+EASP_DB_PASSWORD=<mysql-password>
+EASP_DB_NAME=easp
+
+# 服务端口和日志目录仍在 systemd unit 中配置
 PORT=8082
+EASP_LOG_DIR=/home/workCode/easp/logs
+```
 
-# 数据库
-DB_HOST=<mysql-host>
-DB_PORT=3306
-DB_USER=<mysql-user>
-DB_PASSWORD=<mysql-password>
-DB_NAME=easp
+本地临时运行辅助命令时可先加载：
 
-# 模型服务
-MODEL_BASE_URL=<openai-compatible-base-url>
-MODEL_API_KEY=<model-api-key>
-MODEL_NAME=<model-name>
+```bash
+set -a; . /etc/easp/easp-server.env; set +a
 ```
 
 ---

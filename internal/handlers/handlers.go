@@ -2,7 +2,10 @@ package handlers
 
 import (
 	crypto_rand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/easp-platform/easp/internal/auth"
+	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/easp-platform/easp/internal/repositories"
@@ -257,17 +261,411 @@ func NewUserHandler() *UserHandler {
 	}
 }
 
+func randomHexString(n int) string {
+	b := make([]byte, n)
+	if _, err := crypto_rand.Read(b); err != nil {
+		return fmt.Sprintf("%d%x", time.Now().UnixNano(), n)
+	}
+	return hex.EncodeToString(b)
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func jsonStringPtr(v any) *string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	s := string(b)
+	return &s
+}
+
+// CreateEmbedApp 创建嵌入式接入应用，返回 app_secret 仅此一次。
+func (h *UserHandler) CreateEmbedApp(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	var req struct {
+		Name            string   `json:"name" binding:"required"`
+		ExternalSystem  string   `json:"external_system" binding:"required"`
+		AllowedOrigins  []string `json:"allowed_origins"`
+		AllowedScopes   []string `json:"allowed_scopes"`
+		TokenTTLSeconds int      `json:"token_ttl_seconds"`
+		DefaultRoleIDs  []string `json:"default_role_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	tenant, err := repositories.NewTenantRepository().GetByID(tenantID)
+	if err != nil || tenant.Status != "active" || (tenant.ExpiresAt != nil && tenant.ExpiresAt.Before(time.Now())) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "TENANT_UNAVAILABLE", "message": "租户不存在、未启用或已到期"})
+		return
+	}
+	appID := "app_" + randomHexString(12)
+	appSecret := "easp_secret_" + randomHexString(32)
+	app := &models.TenantEmbedApp{
+		TenantID:        tenantID,
+		AppID:           appID,
+		AppSecretHash:   sha256Hex(appSecret),
+		Name:            req.Name,
+		ExternalSystem:  strings.TrimSpace(req.ExternalSystem),
+		AllowedOrigins:  jsonStringPtr(req.AllowedOrigins),
+		AllowedScopes:   jsonStringPtr(req.AllowedScopes),
+		TokenTTLSeconds: req.TokenTTLSeconds,
+		AutoCreateUser:  false,
+		DefaultRoleIDs:  jsonStringPtr(req.DefaultRoleIDs),
+		Status:          "active",
+	}
+	if len(req.AllowedScopes) == 0 {
+		app.AllowedScopes = jsonStringPtr([]string{"assistant:chat", "assistant:history"})
+	}
+	if err := repositories.NewTenantEmbedAppRepository().Create(app); err != nil {
+		log.Printf("CreateEmbedApp failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create embed app"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"app": app, "app_secret": appSecret})
+}
+
+func (h *UserHandler) ListEmbedApps(c *gin.Context) {
+	apps, err := repositories.NewTenantEmbedAppRepository().ListByTenant(c.Param("tenantId"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list embed apps"})
+		return
+	}
+	if apps == nil {
+		apps = []models.TenantEmbedApp{}
+	}
+	c.JSON(http.StatusOK, apps)
+}
+
+func parseJSONStringArray(value *string) []string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(*value), &items); err != nil {
+		return []string{}
+	}
+	return items
+}
+
+func (h *UserHandler) GetEmbedAppGuide(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	app, err := repositories.NewTenantEmbedAppRepository().GetByID(tenantID, c.Param("appId"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "EMBED_APP_NOT_FOUND", "message": "接入应用不存在"})
+		return
+	}
+	baseURL := strings.TrimRight(c.GetHeader("X-Forwarded-Proto")+"://"+c.GetHeader("Host"), "://")
+	if c.GetHeader("X-Forwarded-Proto") == "" {
+		baseURL = "http://" + c.GetHeader("Host")
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"tenant_id":         tenantID,
+		"app_id":            app.AppID,
+		"app_name":          app.Name,
+		"external_system":   app.ExternalSystem,
+		"allowed_origins":   parseJSONStringArray(app.AllowedOrigins),
+		"allowed_scopes":    parseJSONStringArray(app.AllowedScopes),
+		"token_ttl_seconds": app.TokenTTLSeconds,
+		"endpoints": gin.H{
+			"token_exchange":  "/api/v1/embed/token/exchange",
+			"assistant_frame": "/embed/assistant-frame.html",
+			"sdk":             "/embed/assistant.js",
+		},
+		"examples": gin.H{
+			"iframe":            fmt.Sprintf(`<iframe src="%s/embed/assistant-frame.html?token=EASP_API_TOKEN" style="width:100%%;height:600px;border:0;"></iframe>`, baseURL),
+			"sdk":               `EASPAssistant.mount({ container: '#assistant', token: easpApiToken });`,
+			"signature_payload": gin.H{"tenant_id": tenantID, "external_system": app.ExternalSystem, "external_user_id": "当前业务用户ID"},
+		},
+		"warnings": []string{"app_secret 只允许存放在业务系统服务端", "前端只接收短期 easp-api-token", "外部用户未导入时 Token 换取会返回 EXTERNAL_USER_NOT_IMPORTED"},
+	})
+}
+
+func (h *UserHandler) DiagnoseEmbedApp(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	app, err := repositories.NewTenantEmbedAppRepository().GetByID(tenantID, c.Param("appId"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "EMBED_APP_NOT_FOUND", "message": "接入应用不存在"})
+		return
+	}
+	var req struct {
+		Origin         string `json:"origin"`
+		ExternalUserID string `json:"external_user_id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	checks := []gin.H{}
+	add := func(key, label string, ok bool, code, suggestion string) {
+		item := gin.H{"key": key, "label": label, "ok": ok}
+		if !ok {
+			item["code"] = code
+			item["suggestion"] = suggestion
+		}
+		checks = append(checks, item)
+	}
+	add("app_status", "接入应用状态", app.Status == "active", "EMBED_APP_DISABLED", "请启用接入应用后再联调")
+	tenant, terr := repositories.NewTenantRepository().GetByID(tenantID)
+	tenantOK := terr == nil && tenant.Status == "active" && (tenant.ExpiresAt == nil || tenant.ExpiresAt.After(time.Now()))
+	add("tenant_status", "租户状态", tenantOK, "TENANT_UNAVAILABLE", "请确认租户存在、启用且未到期")
+	originOK := req.Origin == "" || isOriginAllowed(req.Origin, app.AllowedOrigins)
+	add("origin_allowed", "来源白名单", originOK, "ORIGIN_NOT_ALLOWED", "请把业务系统 Origin 加入允许来源，或留空表示不限制")
+	userOK := false
+	if strings.TrimSpace(req.ExternalUserID) != "" {
+		if binding, err := repositories.NewExternalUserBindingRepository().GetActive(tenantID, app.ExternalSystem, strings.TrimSpace(req.ExternalUserID)); err == nil {
+			var u models.User
+			userOK = database.DB.Get(&u, "SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", binding.UserID, tenantID) == nil
+		}
+	}
+	add("external_user", "外部用户绑定", userOK, "EXTERNAL_USER_NOT_IMPORTED", "请先在外部用户中导入该 external_user_id，或使用服务端同步接口导入")
+	canIssue := app.Status == "active" && tenantOK && originOK && userOK
+	c.JSON(http.StatusOK, gin.H{
+		"can_issue_token": canIssue,
+		"app_id":          app.AppID,
+		"external_system": app.ExternalSystem,
+		"checks":          checks,
+	})
+}
+
+// ImportExternalUsers 导入外部业务用户。第一阶段只支持显式导入，不在 token exchange 时自动创建。
+func (h *UserHandler) ImportExternalUsers(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	var req struct {
+		ExternalSystem  string `json:"external_system" binding:"required"`
+		DefaultPassword string `json:"default_password"`
+		Users           []struct {
+			Account        string          `json:"account"`
+			ExternalUserID string          `json:"external_user_id" binding:"required"`
+			Password       string          `json:"password"`
+			UserUID        string          `json:"user_uid"`
+			DisplayName    string          `json:"display_name"`
+			Email          string          `json:"email"`
+			Phone          string          `json:"phone"`
+			Avatar         string          `json:"avatar"`
+			Department     string          `json:"department"`
+			Position       string          `json:"position"`
+			RoleIDs        []string        `json:"role_ids"`
+			Tags           []string        `json:"tags"`
+			Profile        json.RawMessage `json:"profile"`
+			Attributes     json.RawMessage `json:"attributes"`
+			Identities     []struct {
+				Provider       string          `json:"provider" binding:"required"`
+				ProviderUserID string          `json:"provider_user_id" binding:"required"`
+				UnionID        string          `json:"union_id"`
+				OpenID         string          `json:"open_id"`
+				DisplayName    string          `json:"display_name"`
+				Avatar         string          `json:"avatar"`
+				Email          string          `json:"email"`
+				Phone          string          `json:"phone"`
+				Metadata       json.RawMessage `json:"metadata"`
+			} `json:"identities"`
+			Metadata json.RawMessage `json:"metadata"`
+		} `json:"users" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	bindingRepo := repositories.NewExternalUserBindingRepository()
+	identityRepo := repositories.NewUserIdentityBindingRepository()
+	imported := make([]gin.H, 0, len(req.Users))
+	for _, item := range req.Users {
+		metadata := map[string]any{"external_system": req.ExternalSystem, "external_user_id": item.ExternalUserID, "source": "external_import"}
+		if item.Department != "" {
+			metadata["department"] = item.Department
+		}
+		if item.Position != "" {
+			metadata["position"] = item.Position
+		}
+		if len(item.Tags) > 0 {
+			metadata["tags"] = item.Tags
+		}
+		if len(item.Metadata) > 0 {
+			var custom any
+			if json.Unmarshal(item.Metadata, &custom) == nil {
+				metadata["external_metadata"] = custom
+			}
+		}
+		metaPtr := jsonStringPtr(metadata)
+		account := strings.ToLower(strings.TrimSpace(item.Account))
+		if account == "" {
+			account = strings.ToLower(strings.TrimSpace(item.ExternalUserID))
+		}
+		loginPassword := strings.TrimSpace(item.Password)
+		if loginPassword == "" {
+			loginPassword = strings.TrimSpace(req.DefaultPassword)
+		}
+		passwordConfigured := loginPassword != ""
+		if account == "" {
+			imported = append(imported, gin.H{"external_user_id": item.ExternalUserID, "status": "conflict", "error": "ACCOUNT_REQUIRED"})
+			continue
+		}
+		if passwordConfigured && len([]rune(loginPassword)) < 6 {
+			imported = append(imported, gin.H{"external_user_id": item.ExternalUserID, "status": "conflict", "error": "PASSWORD_TOO_SHORT"})
+			continue
+		}
+
+		var user *models.User
+		createdUser := false
+		if existingBinding, err := bindingRepo.GetActive(tenantID, req.ExternalSystem, item.ExternalUserID); err == nil {
+			user, _ = h.repo.GetByID(existingBinding.UserID)
+		}
+		if user == nil {
+			passwordForHash := loginPassword
+			if passwordForHash == "" {
+				passwordForHash = "external-user-" + randomHexString(16)
+			}
+			passwordHash, _ := bcrypt.GenerateFromPassword([]byte(passwordForHash), bcrypt.DefaultCost)
+			newUser := &models.User{UserUID: strings.TrimSpace(item.UserUID), Account: account, TenantID: tenantID, Email: strings.TrimSpace(item.Email), DisplayName: item.DisplayName, Avatar: strings.TrimSpace(item.Avatar), Phone: strings.TrimSpace(item.Phone), PasswordHash: string(passwordHash), Status: "active", SSOProvider: "external", SSOUserID: item.ExternalUserID, Metadata: metaPtr}
+			if len(item.Profile) > 0 {
+				s := string(item.Profile)
+				newUser.Profile = &s
+			}
+			if len(item.Attributes) > 0 {
+				s := string(item.Attributes)
+				newUser.Attributes = &s
+			}
+			if newUser.DisplayName == "" {
+				newUser.DisplayName = item.ExternalUserID
+			}
+			if err := h.repo.Create(newUser); err != nil {
+				// 第一阶段不静默合并邮箱/手机号冲突，避免外部用户误绑定既有 EASP 用户。
+				imported = append(imported, gin.H{"external_user_id": item.ExternalUserID, "status": "conflict", "error": err.Error()})
+				continue
+			}
+			user = newUser
+			createdUser = true
+		} else {
+			if user.Account == "" {
+				user.Account = account
+			}
+			user.Email = strings.TrimSpace(item.Email)
+			user.Phone = strings.TrimSpace(item.Phone)
+			if item.DisplayName != "" {
+				user.DisplayName = item.DisplayName
+			}
+			if strings.TrimSpace(item.Avatar) != "" {
+				user.Avatar = strings.TrimSpace(item.Avatar)
+			}
+			user.Metadata = metaPtr
+			if passwordConfigured {
+				passwordHash, _ := bcrypt.GenerateFromPassword([]byte(loginPassword), bcrypt.DefaultCost)
+				user.PasswordHash = string(passwordHash)
+			}
+			if err := h.repo.Update(user); err != nil {
+				imported = append(imported, gin.H{"external_user_id": item.ExternalUserID, "user_id": user.ID, "status": "conflict", "error": err.Error()})
+				continue
+			}
+		}
+		for _, roleID := range item.RoleIDs {
+			_ = h.roleRepo.Assign(user.ID, roleID)
+		}
+		var rawMeta *string
+		if len(item.Metadata) > 0 {
+			s := string(item.Metadata)
+			rawMeta = &s
+		}
+		binding := &models.ExternalUserBinding{TenantID: tenantID, UserID: user.ID, ExternalSystem: req.ExternalSystem, ExternalUserID: item.ExternalUserID, DisplayName: item.DisplayName, Email: item.Email, Phone: item.Phone, Metadata: rawMeta, Status: "active"}
+		if binding.DisplayName == "" {
+			binding.DisplayName = user.DisplayName
+		}
+		if err := bindingRepo.Upsert(binding); err != nil {
+			imported = append(imported, gin.H{"external_user_id": item.ExternalUserID, "user_id": user.ID, "status": "binding_failed", "error": err.Error()})
+			continue
+		}
+		for _, identity := range item.Identities {
+			var identityMeta *string
+			if len(identity.Metadata) > 0 {
+				s := string(identity.Metadata)
+				identityMeta = &s
+			}
+			_ = identityRepo.Upsert(&models.UserIdentityBinding{
+				TenantID:       tenantID,
+				UserID:         user.ID,
+				Provider:       strings.TrimSpace(identity.Provider),
+				ProviderUserID: strings.TrimSpace(identity.ProviderUserID),
+				UnionID:        strings.TrimSpace(identity.UnionID),
+				OpenID:         strings.TrimSpace(identity.OpenID),
+				ExternalSystem: req.ExternalSystem,
+				DisplayName:    identity.DisplayName,
+				Avatar:         identity.Avatar,
+				Email:          strings.TrimSpace(identity.Email),
+				Phone:          strings.TrimSpace(identity.Phone),
+				Metadata:       identityMeta,
+				Status:         "active",
+			})
+		}
+		resultItem := gin.H{"external_user_id": item.ExternalUserID, "user_id": user.ID, "user_uid": user.UserUID, "account": user.Account, "status": "imported", "login_identifier": user.Account, "password_configured": passwordConfigured}
+		if createdUser {
+			resultItem["status"] = "created"
+		}
+		if passwordConfigured {
+			resultItem["password_updated"] = !createdUser
+		}
+		imported = append(imported, resultItem)
+	}
+	c.JSON(http.StatusOK, gin.H{"items": imported})
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func (h *UserHandler) ListExternalUsers(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
+	bindings, err := repositories.NewExternalUserBindingRepository().Search(c.Param("tenantId"), c.Query("external_system"), c.Query("keyword"), c.Query("status"), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list external users"})
+		return
+	}
+	if bindings == nil {
+		bindings = []models.ExternalUserBinding{}
+	}
+	c.JSON(http.StatusOK, bindings)
+}
+
+func (h *UserHandler) ListUserIdentities(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	items, err := repositories.NewUserIdentityBindingRepository().Search(c.Param("tenantId"), c.Query("provider"), c.Query("keyword"), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list user identities"})
+		return
+	}
+	if items == nil {
+		items = []models.UserIdentityBinding{}
+	}
+	c.JSON(http.StatusOK, items)
+}
+
 // Create 创建用户
 func (h *UserHandler) Create(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 	var req struct {
-		Email       string `json:"email" binding:"required"`
+		Account     string `json:"account" binding:"required"`
+		Email       string `json:"email"`
 		Password    string `json:"password" binding:"required,min=6"`
 		DisplayName string `json:"display_name"`
 		Phone       string `json:"phone"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	req.Account = strings.ToLower(strings.TrimSpace(req.Account))
+	if req.Account == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Account is required"})
+		return
+	}
+	if existing, _ := h.repo.GetByTenantAndAccount(tenantID, req.Account); existing != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Account already exists in this tenant"})
 		return
 	}
 
@@ -279,9 +677,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 
 	user := &models.User{
 		TenantID:     tenantID,
-		Email:        req.Email,
+		Account:      req.Account,
+		Email:        strings.TrimSpace(req.Email),
 		DisplayName:  req.DisplayName,
-		Phone:        req.Phone,
+		Phone:        strings.TrimSpace(req.Phone),
 		PasswordHash: string(passwordHash),
 		Status:       "active",
 	}
@@ -303,13 +702,18 @@ func (h *UserHandler) GetByID(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
-	c.JSON(http.StatusOK, user)
+	identities, _ := repositories.NewUserIdentityBindingRepository().ListByUser(user.TenantID, user.ID)
+	if identities == nil {
+		identities = []models.UserIdentityBinding{}
+	}
+	c.JSON(http.StatusOK, gin.H{"user": user, "identities": identities})
 }
 
 // ListByTenant 列出租户下的用户
 func (h *UserHandler) ListByTenant(c *gin.Context) {
 	tenantID := c.Param("tenantId")
-	users, err := h.repo.ListByTenant(tenantID)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	users, err := h.repo.SearchByTenant(tenantID, strings.TrimSpace(c.Query("keyword")), strings.TrimSpace(c.Query("status")), limit)
 	if err != nil {
 		log.Printf("Failed to list users: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list users", "details": err.Error()})
@@ -331,10 +735,16 @@ func (h *UserHandler) ListByTenant(c *gin.Context) {
 		}
 		result = append(result, gin.H{
 			"id":           user.ID,
+			"user_uid":     user.UserUID,
+			"account":      user.Account,
 			"tenant_id":    user.TenantID,
 			"email":        user.Email,
+			"phone":        user.Phone,
 			"display_name": user.DisplayName,
+			"avatar":       user.Avatar,
 			"status":       user.Status,
+			"profile":      user.Profile,
+			"attributes":   user.Attributes,
 			"is_admin":     isAdmin,
 			"role_names":   roleNames,
 			"login_count":  user.LoginCount,
@@ -534,11 +944,18 @@ func (h *ConnectorHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Connector not found"})
 		return
 	}
+	if err := EnsureConnectorMutable(connector); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
 
 	if err := c.ShouldBindJSON(connector); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	connector.ID = connectorID
+	connector.IsBuiltin = false
+	connector.Locked = false
 
 	if err := h.repo.Update(connector); err != nil {
 		log.Printf("Failed to update connector: %v", err)
@@ -552,6 +969,15 @@ func (h *ConnectorHandler) Update(c *gin.Context) {
 // Delete 删除连接器
 func (h *ConnectorHandler) Delete(c *gin.Context) {
 	connectorID := c.Param("connectorId")
+	connector, err := h.repo.GetByID(connectorID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Connector not found"})
+		return
+	}
+	if err := EnsureConnectorMutable(connector); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
 	if err := h.repo.Delete(connectorID); err != nil {
 		log.Printf("Failed to delete connector: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete connector", "details": err.Error()})
@@ -606,6 +1032,125 @@ func (h *MCPToolHandler) GetByID(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, tool)
+}
+
+type MCPToolAuthorizationRole struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Wildcard bool   `json:"wildcard"`
+}
+
+type MCPToolGovernanceStatus struct {
+	ToolID                  string                     `json:"tool_id"`
+	AuthorizationStatus     string                     `json:"authorization_status"`
+	AuthorizedRoleCount     int                        `json:"authorized_role_count"`
+	AuthorizedRoles         []MCPToolAuthorizationRole `json:"authorized_roles"`
+	CurrentUserCanExecute   bool                       `json:"current_user_can_execute"`
+	CurrentUserGrantedRoles []MCPToolAuthorizationRole `json:"current_user_granted_roles"`
+	BlockReasons            []string                   `json:"block_reasons"`
+}
+
+func jsonStringArray(value *string) []string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(*value), &items); err != nil {
+		return []string{}
+	}
+	return items
+}
+
+func containsStringValue(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func roleGrantsMCPTool(role models.Role, toolID string) bool {
+	if containsStringValue(jsonStringArray(role.Tools), "*") {
+		return true
+	}
+	return containsStringValue(jsonStringArray(role.AllowedMCPTools), toolID)
+}
+
+func isPublishedMCPToolStatus(status string) bool {
+	return status == skillpkg.SkillStatusPublished || status == "active"
+}
+
+func mcpToolBlockReasons(tool *models.MCPTool) []string {
+	reasons := []string{}
+	if !tool.Enabled {
+		reasons = append(reasons, "工具未启用")
+	}
+	if !isPublishedMCPToolStatus(tool.Status) {
+		reasons = append(reasons, "工具未发布")
+	}
+	return reasons
+}
+
+// GovernanceStatus 获取 MCP 工具治理授权状态
+func (h *MCPToolHandler) GovernanceStatus(c *gin.Context) {
+	tenantID := c.Param("tenantId")
+	toolID := c.Param("toolId")
+	tool, err := h.repo.GetByID(toolID)
+	if err != nil || tool.TenantID != tenantID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "MCP tool not found"})
+		return
+	}
+
+	roles, err := repositories.NewRoleRepository().ListByTenant(tenantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list roles"})
+		return
+	}
+
+	authorizedRoles := []MCPToolAuthorizationRole{}
+	for _, role := range roles {
+		if role.IsSystem {
+			continue
+		}
+		if roleGrantsMCPTool(role, toolID) {
+			authorizedRoles = append(authorizedRoles, MCPToolAuthorizationRole{ID: role.ID, Name: role.Name, Wildcard: containsStringValue(jsonStringArray(role.Tools), "*")})
+		}
+	}
+
+	currentUserRoles := []models.Role{}
+	if userID, ok := c.Get(middleware.ContextUserID); ok {
+		currentUserRoles, _ = repositories.NewUserRoleRepository().GetUserRoles(userID.(string))
+	}
+	currentUserGrantedRoles := []MCPToolAuthorizationRole{}
+	for _, role := range currentUserRoles {
+		if roleGrantsMCPTool(role, toolID) {
+			currentUserGrantedRoles = append(currentUserGrantedRoles, MCPToolAuthorizationRole{ID: role.ID, Name: role.Name, Wildcard: containsStringValue(jsonStringArray(role.Tools), "*")})
+		}
+	}
+
+	blockReasons := mcpToolBlockReasons(tool)
+	if len(currentUserGrantedRoles) == 0 {
+		blockReasons = append(blockReasons, "当前用户角色未授权")
+	}
+	canExecute := len(blockReasons) == 0
+	authStatus := "not_granted"
+	if len(authorizedRoles) > 0 {
+		authStatus = "granted"
+	}
+	if !tool.Enabled || !isPublishedMCPToolStatus(tool.Status) {
+		authStatus = "unavailable"
+	}
+
+	c.JSON(http.StatusOK, MCPToolGovernanceStatus{
+		ToolID:                  toolID,
+		AuthorizationStatus:     authStatus,
+		AuthorizedRoleCount:     len(authorizedRoles),
+		AuthorizedRoles:         authorizedRoles,
+		CurrentUserCanExecute:   canExecute,
+		CurrentUserGrantedRoles: currentUserGrantedRoles,
+		BlockReasons:            blockReasons,
+	})
 }
 
 // ListByTenant 列出租户下的MCP工具
@@ -1094,7 +1639,16 @@ func (h *AuditLogHandler) ListByTenant(c *gin.Context) {
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
 
-	logs, err := h.repo.ListByTenant(tenantID, limit, offset)
+	logs, err := h.repo.SearchByTenant(tenantID, repositories.AuditLogFilter{
+		SourceType:     c.Query("source_type"),
+		SourceAppID:    c.Query("source_app_id"),
+		ExternalSystem: c.Query("external_system"),
+		ExternalUserID: c.Query("external_user_id"),
+		UserUID:        c.Query("user_uid"),
+		UserID:         c.Query("user_id"),
+		Tool:           c.Query("tool"),
+		Action:         c.Query("action"),
+	}, limit, offset)
 	if err != nil {
 		log.Printf("Failed to list audit logs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list audit logs", "details": err.Error()})

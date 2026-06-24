@@ -4,7 +4,7 @@ import {
   SendOutlined, RobotOutlined, UserOutlined, ClearOutlined,
   LoadingOutlined, CheckCircleOutlined, ClockCircleOutlined,
   ThunderboltOutlined, ToolOutlined, BranchesOutlined,
-  DownOutlined
+  DownOutlined, ApiOutlined
 } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,7 @@ import {
   loadAssistantConversationId,
   saveAssistantConversationId,
 } from '../utils/assistantContext';
+import AccessManualModal from '../components/AccessManualModal';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -182,6 +183,7 @@ const Assistant: React.FC = () => {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMobile = window.innerWidth < 768;
@@ -405,9 +407,14 @@ const Assistant: React.FC = () => {
           )}
           {sending && <Tag icon={<LoadingOutlined />} color="processing" style={{ marginLeft: 4 }}>思考中</Tag>}
         </Title>
-        <Button icon={<ClearOutlined />} onClick={onClear} disabled={messages.length === 0} size={isMobile ? 'small' : 'middle'}>
-          清空对话
-        </Button>
+        <Space wrap>
+          <Button icon={<ApiOutlined />} onClick={() => setManualOpen(true)} size={isMobile ? 'small' : 'middle'}>
+            AI助手接入手册
+          </Button>
+          <Button icon={<ClearOutlined />} onClick={onClear} disabled={messages.length === 0} size={isMobile ? 'small' : 'middle'}>
+            清空对话
+          </Button>
+        </Space>
       </div>
 
       <Card 
@@ -525,6 +532,8 @@ const Assistant: React.FC = () => {
           {isMobile ? '' : '发送'}
         </Button>
       </div>
+
+      <AccessManualModal type="assistant" open={manualOpen} tenantId={currentTenant} onClose={() => setManualOpen(false)} />
 
       <style>{`
         .typing-cursor {

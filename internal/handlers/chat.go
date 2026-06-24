@@ -534,10 +534,16 @@ func saveConversationMessage(tenantID, userID, conversationID, role, content str
 }
 
 type auditContext struct {
-	AgentID   string
-	IP        string
-	UserAgent string
-	StartedAt time.Time
+	AgentID        string
+	IP             string
+	UserAgent      string
+	StartedAt      time.Time
+	SourceType     string
+	SourceAppID    string
+	ExternalSystem string
+	ExternalUserID string
+	UserUID        string
+	RequestContext context.Context
 }
 
 // logAudit 记录审计日志（AI助手写操作）
@@ -550,10 +556,31 @@ func logAudit(ctx *auditContext, tenantID, userID, toolName, action, resource, d
 	}
 	if userID != "" {
 		auditLog.UserID = &userID
+		var userUID string
+		if ctx != nil && ctx.UserUID != "" {
+			userUID = ctx.UserUID
+		} else {
+			_ = database.DB.Get(&userUID, "SELECT COALESCE(user_uid, '') FROM users WHERE id = ?", userID)
+		}
+		if userUID != "" {
+			auditLog.UserUID = &userUID
+		}
 	}
 	if ctx != nil {
 		if ctx.AgentID != "" {
 			auditLog.AgentID = &ctx.AgentID
+		}
+		if ctx.SourceType != "" {
+			auditLog.SourceType = &ctx.SourceType
+		}
+		if ctx.SourceAppID != "" {
+			auditLog.SourceAppID = &ctx.SourceAppID
+		}
+		if ctx.ExternalSystem != "" {
+			auditLog.ExternalSystem = &ctx.ExternalSystem
+		}
+		if ctx.ExternalUserID != "" {
+			auditLog.ExternalUserID = &ctx.ExternalUserID
 		}
 		if ctx.IP != "" {
 			auditLog.IP = &ctx.IP
@@ -1722,6 +1749,27 @@ func jsonStringArg(args map[string]any, key string, fallback string) string {
 	}
 }
 
+func truthy(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case uint64:
+		return value != 0
+	case []byte:
+		s := strings.TrimSpace(string(value))
+		return s == "1" || strings.EqualFold(s, "true")
+	case string:
+		s := strings.TrimSpace(value)
+		return s == "1" || strings.EqualFold(s, "true")
+	default:
+		return fmt.Sprint(value) == "1" || strings.EqualFold(fmt.Sprint(value), "true")
+	}
+}
+
 // writeTools 需要审计日志的写操作工具集合
 var writeTools = map[string]bool{
 	"create_connector": true, "update_connector": true,
@@ -2017,10 +2065,13 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if connectorID == "" {
 			return `{"error": "connector_id 为必填项"}`
 		}
-		// 验证连接器属于当前租户
-		existing, _ := queryMaps("SELECT id FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
+		// 验证连接器属于当前租户，并拦截内置/锁定连接器，防止通过助手治理工具绕过管理 API。
+		existing, _ := queryMaps("SELECT CAST(id AS CHAR) as id, type, is_builtin, locked FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
 		if len(existing) == 0 {
 			return `{"error": "连接器不存在或不属于当前租户"}`
+		}
+		if truthy(existing[0]["is_builtin"]) || truthy(existing[0]["locked"]) || fmt.Sprint(existing[0]["type"]) == "builtin" {
+			return `{"error": "内置锁定连接器不可编辑、停用或删除"}`
 		}
 		sets := []string{}
 		args_sql := []any{}
@@ -2091,9 +2142,12 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 		if toolID == "" {
 			return `{"error": "tool_id 为必填项"}`
 		}
-		existing, _ := queryMaps("SELECT id FROM mcp_tools WHERE id = ? AND tenant_id = ?", toolID, tenantID)
+		existing, _ := queryMaps("SELECT CAST(id AS CHAR) as id, is_builtin, locked FROM mcp_tools WHERE id = ? AND tenant_id = ?", toolID, tenantID)
 		if len(existing) == 0 {
 			return `{"error": "MCP工具不存在或不属于当前租户"}`
+		}
+		if truthy(existing[0]["is_builtin"]) || truthy(existing[0]["locked"]) {
+			return `{"error": "内置锁定 MCP 工具不可编辑、停用或删除"}`
 		}
 		sets := []string{}
 		args_sql := []any{}
@@ -2622,7 +2676,12 @@ func (h *ChatHandler) executeTool(tenantID, userID, toolName string, args map[st
 			}
 			// 调用MCP工具
 			mcpHandler := NewMCPHandler()
-			result, callErr := mcpHandler.proxy.CallTool(context.Background(), easpMCP.ToolCallRequest{
+			callCtx := context.Background()
+			if ctx != nil && ctx.RequestContext != nil {
+				callCtx = ctx.RequestContext
+			}
+			ctxWithToken := contextWithUserSSOToken(callCtx, tenantID, userID)
+			result, callErr := mcpHandler.proxy.CallTool(ctxWithToken, easpMCP.ToolCallRequest{
 				Tool:      mcpTool,
 				Connector: connector,
 				Arguments: json.RawMessage(argumentsJSON),
@@ -3029,10 +3088,15 @@ func (h *ChatHandler) ChatStream(c *gin.Context) {
 				}
 				toolMessage := "正在" + getToolDisplayName(tc.Function.Name) + "..."
 				auditCtx := &auditContext{
-					AgentID:   requestID,
-					IP:        c.ClientIP(),
-					UserAgent: c.Request.UserAgent(),
-					StartedAt: toolStart,
+					AgentID:        requestID,
+					IP:             c.ClientIP(),
+					UserAgent:      c.Request.UserAgent(),
+					StartedAt:      toolStart,
+					SourceType:     c.GetString(middleware.ContextSourceType),
+					SourceAppID:    c.GetString(middleware.ContextSourceAppID),
+					ExternalSystem: c.GetString(middleware.ContextExternalSystem),
+					ExternalUserID: c.GetString(middleware.ContextExternalUserID),
+					RequestContext: c.Request.Context(),
 				}
 				result, toolWaitErr := waitToolWithHeartbeat(c, requestStart, activity, "tool_calling", toolMessage, func() string {
 					return h.executeTool(tid, userID.(string), tc.Function.Name, args, auditCtx)

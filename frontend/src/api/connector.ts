@@ -18,6 +18,8 @@ export interface Connector {
   openapi_spec?: string;
   status: string;
   tools_count?: number;
+  is_builtin?: boolean;
+  locked?: boolean;
   created_at: string;
   updated_at: string;
 }

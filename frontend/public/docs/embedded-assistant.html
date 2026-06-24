@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EASP 嵌入式 AI 助手第三方接入手册</title>
+  <style>
+    body{margin:0;background:#f6f8fb;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif}
+    .wrap{max-width:980px;margin:0 auto;padding:32px 18px 72px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 10px 32px rgba(15,23,42,.06);padding:28px}
+    .top{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:18px}
+    .badge{background:#e8f2ff;color:#0958d9;border:1px solid #bae0ff;padding:6px 10px;border-radius:999px;font-size:13px}
+    a{color:#1677ff;text-decoration:none}
+    h1{font-size:32px;margin:12px 0 18px}
+    h2{margin-top:36px;padding-top:16px;border-top:1px solid #eef2f7}
+    h3{margin-top:24px}
+    p,li{line-height:1.8}
+    pre{overflow:auto;background:#0f172a;color:#e5e7eb;padding:16px;border-radius:12px;line-height:1.55}
+    code{background:#eef2ff;color:#3730a3;padding:2px 5px;border-radius:5px}
+    pre code{background:transparent;color:inherit;padding:0}
+    blockquote{margin:12px 0;padding:12px 16px;background:#f0f7ff;border-left:4px solid #1677ff;border-radius:8px}
+    table{width:100%;border-collapse:collapse;margin:12px 0;display:block;overflow-x:auto}
+    th,td{border:1px solid #e5e7eb;padding:9px 10px;text-align:left;white-space:nowrap}
+    th{background:#f8fafc}
+    ul,ol{padding-left:24px}
+    @media(max-width:600px){.card{padding:18px}h1{font-size:26px}.top{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <div class="top">
+        <span class="badge">Third-party Integration Manual</span>
+        <a href="/docs/embedded-assistant.md">查看 Markdown 原文</a>
+      </div>
+      <h1 id="easp-ai">EASP 嵌入式 AI 助手第三方接入手册</h1>
+<blockquote>
+<p>本文面向<strong>第三方业务系统开发者/集成方</strong>，说明你需要在自己的业务系统里完成哪些工作，才能把 EASP AI 助手嵌入到 H5/PC 页面。<br />
+EASP 内部的权限、用户绑定、Token 校验、AI 助手、工具/Skill/MCP 执行链路由 EASP 平台负责，第三方系统不要自行实现或绕过。</p>
+</blockquote>
+<p>在线手册：<code>/docs/embedded-assistant.html</code>；Markdown 原文：<code>/docs/embedded-assistant.md</code>。</p>
+<hr />
+<h2 id="1">1. 接入前准备</h2>
+<p>请先从 EASP 租户管理员处获取以下信息：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>说明</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tenant_id</code></td>
+<td>EASP 租户 ID</td>
+<td><code>tenant_xxx</code></td>
+</tr>
+<tr>
+<td><code>app_id</code></td>
+<td>嵌入接入应用 ID</td>
+<td><code>app_xxx</code></td>
+</tr>
+<tr>
+<td><code>app_secret</code></td>
+<td>应用密钥，只展示一次，请放在业务系统服务端</td>
+<td><code>easp_secret_xxx</code></td>
+</tr>
+<tr>
+<td><code>external_system</code></td>
+<td>你的业务系统标识，需要与 EASP 接入应用配置一致</td>
+<td><code>crm</code></td>
+</tr>
+<tr>
+<td>EASP 地址</td>
+<td>EASP 平台访问地址</td>
+<td><code>https://easp.example.com</code></td>
+</tr>
+</tbody>
+</table>
+<p>接入前还需要确认：</p>
+<ol>
+<li>EASP 管理后台已创建「嵌入接入应用」。</li>
+<li>你的业务系统域名已加入应用的 <code>allowed_origins</code> 白名单。</li>
+<li>需要使用助手的外部用户已在 EASP 完成导入/绑定，并已分配 EASP 角色和工具权限。</li>
+</ol>
+<blockquote>
+<p>第三方系统只传递“当前登录的是哪个外部用户”；该用户能用哪些 AI 能力，由 EASP 的用户、角色、工具、Skill、MCP 权限实时决定。</p>
+</blockquote>
+<hr />
+<h2 id="2">2. 接入总流程</h2>
+<pre><code class="language-text">业务系统用户登录
+  ↓
+业务系统前端加载 EASP JS SDK 或 iframe
+  ↓
+业务系统前端请求自己的后端：/api/easp/embed-token
+  ↓
+业务系统后端用 app_id/app_secret 对当前 external_user_id 签名
+  ↓
+业务系统后端调用 EASP：POST /api/v1/embed/token/exchange
+  ↓
+EASP 返回 easp-api-token
+  ↓
+业务系统前端把 easp-api-token 交给 SDK/iframe
+  ↓
+用户开始使用嵌入式 AI 助手
+</code></pre>
+<p>第三方系统需要实现的只有三件事：</p>
+<ol>
+<li><strong>服务端换 Token</strong>：保护 <code>app_secret</code>，向 EASP 换取 <code>easp-api-token</code>。</li>
+<li><strong>页面嵌入助手</strong>：选择 JS SDK 或 iframe。</li>
+<li><strong>传递当前外部用户身份</strong>：把你系统里的用户 ID 映射成 <code>external_user_id</code>。</li>
+</ol>
+<hr />
+<h2 id="3-easp-api-token">3. 服务端：换取 easp-api-token</h2>
+<h3 id="31">3.1 你需要提供一个自己的后端接口</h3>
+<p>建议在业务系统后端提供接口，例如：</p>
+<pre><code class="language-http">POST /api/easp/embed-token
+Cookie: &lt;业务系统自己的登录态&gt;
+</code></pre>
+<p>这个接口由你的前端调用。接口内部应完成：</p>
+<ol>
+<li>校验当前用户已登录你的业务系统。</li>
+<li>取出当前用户在你系统中的稳定 ID，作为 <code>external_user_id</code>。</li>
+<li>用 <code>app_secret</code> 生成签名。</li>
+<li>调用 EASP token exchange 接口。</li>
+<li>把 EASP 返回的 <code>easp-api-token</code> 返回给前端。</li>
+</ol>
+<blockquote>
+<p>不要把 <code>app_secret</code> 放到浏览器、H5、小程序或 App 客户端里。</p>
+</blockquote>
+<h3 id="32-easp-token-exchange">3.2 调用 EASP Token Exchange</h3>
+<pre><code class="language-http">POST https://easp.example.com/api/v1/embed/token/exchange
+Content-Type: application/json
+X-EASP-App-Id: &lt;app_id&gt;
+X-EASP-Timestamp: &lt;unix_seconds&gt;
+X-EASP-Nonce: &lt;random_string&gt;
+X-EASP-Signature: &lt;signature&gt;
+</code></pre>
+<p>请求体：</p>
+<pre><code class="language-json">{
+  &quot;tenant_id&quot;: &quot;tenant_xxx&quot;,
+  &quot;external_system&quot;: &quot;crm&quot;,
+  &quot;external_user_id&quot;: &quot;u10086&quot;
+}
+</code></pre>
+<p>成功响应：</p>
+<pre><code class="language-http">HTTP/1.1 200 OK
+easp-api-token: &lt;token&gt;
+Access-Control-Expose-Headers: easp-api-token
+</code></pre>
+<pre><code class="language-json">{
+  &quot;token&quot;: &quot;&lt;token&gt;&quot;,
+  &quot;expires_at&quot;: &quot;2026-06-15T16:00:00+08:00&quot;,
+  &quot;user&quot;: {
+    &quot;id&quot;: &quot;easp-user-id&quot;,
+    &quot;tenant_id&quot;: &quot;tenant_xxx&quot;,
+    &quot;display_name&quot;: &quot;张三&quot;
+  }
+}
+</code></pre>
+<h3 id="33">3.3 签名规则</h3>
+<p>签名 payload 按固定顺序拼接：</p>
+<pre><code class="language-text">app_id=&lt;app_id&gt;&amp;timestamp=&lt;timestamp&gt;&amp;nonce=&lt;nonce&gt;&amp;external_system=&lt;external_system&gt;&amp;external_user_id=&lt;external_user_id&gt;&amp;tenant_id=&lt;tenant_id&gt;
+</code></pre>
+<p>签名密钥：</p>
+<pre><code class="language-text">secret_hash = SHA256(app_secret) 的十六进制字符串
+</code></pre>
+<p>签名算法：</p>
+<pre><code class="language-text">signature = HMAC-SHA256(secret_hash, payload) 的十六进制字符串
+</code></pre>
+<h3 id="34-nodejs">3.4 Node.js 示例</h3>
+<pre><code class="language-js">import crypto from 'crypto';
+import express from 'express';
+
+const router = express.Router();
+
+const EASP_BASE_URL = 'https://easp.example.com';
+const TENANT_ID = process.env.EASP_TENANT_ID;
+const APP_ID = process.env.EASP_APP_ID;
+const APP_SECRET = process.env.EASP_APP_SECRET;
+const EXTERNAL_SYSTEM = 'crm';
+
+function signEmbedToken({ externalUserId, timestamp, nonce }) {
+  const secretHash = crypto.createHash('sha256').update(APP_SECRET).digest('hex');
+  const payload = [
+    `app_id=${APP_ID}`,
+    `timestamp=${timestamp}`,
+    `nonce=${nonce}`,
+    `external_system=${EXTERNAL_SYSTEM}`,
+    `external_user_id=${externalUserId}`,
+    `tenant_id=${TENANT_ID}`
+  ].join('&amp;');
+
+  return crypto.createHmac('sha256', secretHash).update(payload).digest('hex');
+}
+
+router.post('/api/easp/embed-token', async (req, res) =&gt; {
+  // 1. 校验你自己系统的登录态
+  const currentUser = req.user;
+  if (!currentUser) {
+    return res.status(401).json({ message: '未登录' });
+  }
+
+  // 2. 使用你系统中的稳定用户 ID，对应 EASP 的 external_user_id
+  const externalUserId = String(currentUser.id);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const signature = signEmbedToken({ externalUserId, timestamp, nonce });
+
+  // 3. 调用 EASP 换取 easp-api-token
+  const easpResp = await fetch(`${EASP_BASE_URL}/api/v1/embed/token/exchange`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-EASP-App-Id': APP_ID,
+      'X-EASP-Timestamp': timestamp,
+      'X-EASP-Nonce': nonce,
+      'X-EASP-Signature': signature
+    },
+    body: JSON.stringify({
+      tenant_id: TENANT_ID,
+      external_system: EXTERNAL_SYSTEM,
+      external_user_id: externalUserId
+    })
+  });
+
+  const data = await easpResp.json().catch(() =&gt; ({}));
+  if (!easpResp.ok) {
+    return res.status(easpResp.status).json(data);
+  }
+
+  // 4. 返回给前端。也可以只返回 token 字段。
+  return res.json({
+    token: data.token || easpResp.headers.get('easp-api-token'),
+    expires_at: data.expires_at,
+    user: data.user
+  });
+});
+
+export default router;
+</code></pre>
+<hr />
+<h2 id="4-js-sdk">4. 前端：JS SDK 嵌入</h2>
+<p>适合 H5、移动端、需要读取页面上下文的业务系统。</p>
+<pre><code class="language-html">&lt;script src=&quot;https://easp.example.com/embed/assistant.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+EASPAssistant.init({
+  baseUrl: 'https://easp.example.com',
+  tenantId: 'tenant_xxx',
+  title: 'AI 助手',
+  position: 'right-bottom',
+
+  // 由你的后端换 token，前端不要接触 app_secret
+  tokenProvider: async () =&gt; {
+    const res = await fetch('/api/easp/embed-token', {
+      method: 'POST',
+      credentials: 'include'
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    return data.token;
+  },
+
+  // 可选：把当前业务页面上下文传给 AI 助手
+  pageContextProvider: () =&gt; ({
+    url: location.href,
+    title: document.title,
+    page_type: 'customer_detail',
+    business_id: window.__BUSINESS_ID__
+  })
+});
+&lt;/script&gt;
+</code></pre>
+<hr />
+<h2 id="5-iframe">5. 前端：iframe 嵌入</h2>
+<p>适合老系统、第三方门户、需要样式强隔离的页面。</p>
+<pre><code class="language-html">&lt;iframe
+  id=&quot;easp-assistant&quot;
+  src=&quot;https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx&quot;
+  style=&quot;position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;&quot;
+&gt;&lt;/iframe&gt;
+
+&lt;script&gt;
+async function initEASPAssistant() {
+  const res = await fetch('/api/easp/embed-token', {
+    method: 'POST',
+    credentials: 'include'
+  });
+  if (!res.ok) throw new Error(await res.text());
+
+  const data = await res.json();
+  const frame = document.getElementById('easp-assistant');
+
+  frame.contentWindow.postMessage({
+    type: 'EASP_ASSISTANT_TOKEN',
+    token: data.token,
+    context: {
+      url: location.href,
+      title: document.title,
+      page_type: 'customer_detail'
+    }
+  }, 'https://easp.example.com');
+}
+
+initEASPAssistant();
+&lt;/script&gt;
+</code></pre>
+<p>更新页面上下文：</p>
+<pre><code class="language-js">document.getElementById('easp-assistant').contentWindow.postMessage({
+  type: 'EASP_ASSISTANT_CONTEXT_UPDATE',
+  context: {
+    url: location.href,
+    title: document.title,
+    page_type: 'order_detail',
+    order_id: 'O-10086'
+  }
+}, 'https://easp.example.com');
+</code></pre>
+<p>退出或切换账号时清空 Token：</p>
+<pre><code class="language-js">document.getElementById('easp-assistant').contentWindow.postMessage({
+  type: 'EASP_ASSISTANT_LOGOUT'
+}, 'https://easp.example.com');
+</code></pre>
+<hr />
+<h2 id="6">6. 历史会话接口（可选）</h2>
+<p>如果你的业务系统需要展示或归档用户自己的 AI 会话记录，可使用 <code>easp-api-token</code> 调用：</p>
+<pre><code class="language-http">GET https://easp.example.com/embed/v1/assistant/conversations
+easp-api-token: &lt;token&gt;
+</code></pre>
+<pre><code class="language-http">GET https://easp.example.com/embed/v1/assistant/conversations/:conversationId/messages
+easp-api-token: &lt;token&gt;
+</code></pre>
+<p>说明：</p>
+<ul>
+<li>普通嵌入用户只能查询自己的历史会话。</li>
+<li>租户管理员审计/全量查询请在 EASP 管理后台完成，不要混用嵌入式 Token。</li>
+</ul>
+<hr />
+<h2 id="7">7. 常见错误</h2>
+<table>
+<thead>
+<tr>
+<th>错误码</th>
+<th>含义</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EASP_SIGNATURE_REQUIRED</code></td>
+<td>缺少签名请求头</td>
+<td>检查 <code>X-EASP-*</code> 头是否完整</td>
+</tr>
+<tr>
+<td><code>INVALID_SIGNATURE</code></td>
+<td>签名错误</td>
+<td>检查 payload 顺序、<code>app_secret</code>、<code>external_user_id</code> 是否一致</td>
+</tr>
+<tr>
+<td><code>INVALID_TIMESTAMP</code></td>
+<td>时间戳过期或服务器时间偏差过大</td>
+<td>使用当前 Unix 秒级时间戳，确保服务器校时</td>
+</tr>
+<tr>
+<td><code>INVALID_EMBED_APP</code></td>
+<td>app 不存在、禁用或与租户/系统不匹配</td>
+<td>联系 EASP 管理员检查接入应用配置</td>
+</tr>
+<tr>
+<td><code>ORIGIN_NOT_ALLOWED</code></td>
+<td>当前域名不在白名单</td>
+<td>联系 EASP 管理员添加 <code>allowed_origins</code></td>
+</tr>
+<tr>
+<td><code>TENANT_UNAVAILABLE</code></td>
+<td>租户不可用、停用或到期</td>
+<td>联系 EASP 管理员</td>
+</tr>
+<tr>
+<td><code>EXTERNAL_USER_NOT_IMPORTED</code></td>
+<td>外部用户未导入/未绑定</td>
+<td>先在 EASP 导入并绑定该用户</td>
+</tr>
+<tr>
+<td><code>EASP_USER_INACTIVE</code></td>
+<td>绑定的 EASP 用户不存在或被停用</td>
+<td>联系 EASP 管理员启用/修复绑定</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8">8. 第三方系统不要做的事</h2>
+<ul>
+<li>不要在前端保存或传输 <code>app_secret</code>。</li>
+<li>不要用 EASP 后台账号密码在第三方前端模拟登录。</li>
+<li>不要把 <code>easp-api-token</code> 当作 EASP 管理后台 JWT 使用。</li>
+<li>不要在第三方系统自行决定 EASP 工具、Skill、MCP 权限。</li>
+<li>不要在外部用户未导入/未绑定时静默创建临时用户。</li>
+<li>不要把 Token 放到 iframe URL query 中。</li>
+</ul>
+<hr />
+<h2 id="9">9. 接入自测清单</h2>
+<ul>
+<li>[ ] 业务系统后端已配置 <code>tenant_id/app_id/app_secret/external_system</code>。</li>
+<li>[ ] <code>app_secret</code> 只存在服务端环境变量或密钥管理系统中。</li>
+<li>[ ] 当前业务域名已加入 EASP 应用白名单。</li>
+<li>[ ] 当前测试用户的 <code>external_user_id</code> 已在 EASP 导入并绑定。</li>
+<li>[ ] <code>/api/easp/embed-token</code> 能成功返回 token。</li>
+<li>[ ] JS SDK 或 iframe 能打开助手并发送消息。</li>
+<li>[ ] Token 过期或 401 时能重新换取 token。</li>
+<li>[ ] 退出/切换账号时会清理旧 token 和会话上下文。</li>
+</ul>
+    </section>
+  </main>
+</body>
+</html>

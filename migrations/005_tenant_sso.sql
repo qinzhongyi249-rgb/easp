@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS tenant_sso_configs (
     sync_url VARCHAR(500) COMMENT '同步用户信息的接口地址',
     sync_method VARCHAR(10) DEFAULT 'POST',
     sync_headers TEXT COMMENT '同步请求头JSON',
+
+    -- 用户开通策略
+    auto_create_user TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否允许SSO首次登录自动创建EASP用户',
+    default_role_ids JSON NULL COMMENT 'SSO自动创建用户默认角色ID数组',
     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

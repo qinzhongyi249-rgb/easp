@@ -7,38 +7,49 @@ import (
 	"github.com/easp-platform/easp/internal/models"
 )
 
-func TestRegisterIdentityRequiresEmailOrPhone(t *testing.T) {
+func TestRegisterIdentityRequiresAccount(t *testing.T) {
 	req := RegisterRequest{TenantID: "tenant-1", Password: "password"}
 	if err := req.NormalizeAndValidateIdentity(); err == nil {
-		t.Fatalf("registration without email and phone should be rejected")
+		t.Fatalf("registration without account should be rejected")
 	}
 }
 
-func TestRegisterIdentityAllowsPhoneOnlyAndNormalizesPhone(t *testing.T) {
-	req := RegisterRequest{TenantID: "tenant-1", Phone: " 138 0013-8000 ", Password: "password"}
+func TestRegisterIdentityAllowsAccountAndNormalizesContacts(t *testing.T) {
+	req := RegisterRequest{TenantID: "tenant-1", Account: " User001 ", Email: " User@Example.COM ", Phone: " 138 0013-8000 ", Password: "password"}
 	if err := req.NormalizeAndValidateIdentity(); err != nil {
-		t.Fatalf("phone-only registration should be allowed: %v", err)
+		t.Fatalf("account registration should be allowed: %v", err)
+	}
+	if req.Account != "user001" {
+		t.Fatalf("account should be normalized, got %q", req.Account)
+	}
+	if req.Email != "user@example.com" {
+		t.Fatalf("email should be normalized, got %q", req.Email)
 	}
 	if req.Phone != "13800138000" {
 		t.Fatalf("phone should be normalized, got %q", req.Phone)
 	}
 }
 
-func TestLoginIdentifierSupportsEmailAndPhone(t *testing.T) {
-	emailReq := LoginRequest{Email: "User@Example.COM", Password: "password"}
-	if got := emailReq.NormalizedIdentifier(); got != "user@example.com" {
-		t.Fatalf("expected normalized email identifier, got %q", got)
+func TestLoginIdentifierUsesAccount(t *testing.T) {
+	accountReq := LoginRequest{Account: " User001 ", Password: "password"}
+	if got := accountReq.NormalizedIdentifier(); got != "user001" {
+		t.Fatalf("expected normalized account identifier, got %q", got)
 	}
 
-	phoneReq := LoginRequest{Phone: " 138 0013-8000 ", Password: "password"}
-	if got := phoneReq.NormalizedIdentifier(); got != "13800138000" {
-		t.Fatalf("expected normalized phone identifier, got %q", got)
+	legacyEmailReq := LoginRequest{Email: "User@Example.COM", Password: "password"}
+	if got := legacyEmailReq.NormalizedIdentifier(); got != "user@example.com" {
+		t.Fatalf("expected legacy email as account identifier, got %q", got)
+	}
+
+	legacyPhoneReq := LoginRequest{Phone: " 138 0013-8000 ", Password: "password"}
+	if got := legacyPhoneReq.NormalizedIdentifier(); got != "138 0013-8000" {
+		t.Fatalf("legacy phone is treated as account text, got %q", got)
 	}
 }
 
 func TestSelectLoginUserAllowsSingleTenantWithoutTenantID(t *testing.T) {
 	users := []models.User{
-		{ID: "u1", TenantID: "tenant-a", Email: "single@example.com"},
+		{ID: "u1", TenantID: "tenant-a", Account: "single"},
 	}
 	user, err := SelectLoginUser(users, "")
 	if err != nil {
@@ -51,8 +62,8 @@ func TestSelectLoginUserAllowsSingleTenantWithoutTenantID(t *testing.T) {
 
 func TestSelectLoginUserRequiresTenantWhenIdentifierMatchesMultipleTenants(t *testing.T) {
 	users := []models.User{
-		{ID: "u1", TenantID: "tenant-a", Email: "same@example.com"},
-		{ID: "u2", TenantID: "tenant-b", Email: "same@example.com"},
+		{ID: "u1", TenantID: "tenant-a", Account: "same"},
+		{ID: "u2", TenantID: "tenant-b", Account: "same"},
 	}
 	_, err := SelectLoginUser(users, "")
 	if !errors.Is(err, ErrTenantRequired) {
@@ -62,8 +73,8 @@ func TestSelectLoginUserRequiresTenantWhenIdentifierMatchesMultipleTenants(t *te
 
 func TestSelectLoginUserUsesSpecifiedTenant(t *testing.T) {
 	users := []models.User{
-		{ID: "u1", TenantID: "tenant-a", Email: "same@example.com"},
-		{ID: "u2", TenantID: "tenant-b", Email: "same@example.com"},
+		{ID: "u1", TenantID: "tenant-a", Account: "same"},
+		{ID: "u2", TenantID: "tenant-b", Account: "same"},
 	}
 	user, err := SelectLoginUser(users, "tenant-b")
 	if err != nil {

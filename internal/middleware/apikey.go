@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/easp-platform/easp/internal/auth"
 	"github.com/easp-platform/easp/internal/database"
+	"github.com/easp-platform/easp/internal/mcp"
 	"github.com/easp-platform/easp/internal/models"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -15,9 +17,15 @@ import (
 
 // Context keys for Embed API
 const (
-	ContextAPIKey         = "api_key"
-	ContextEmbedTenantID  = "embed_tenant_id"
-	ContextEmbedUserID    = "embed_user_id"
+	ContextAPIKey           = "api_key"
+	ContextEmbedTenantID    = "embed_tenant_id"
+	ContextEmbedUserID      = "embed_user_id"
+	ContextEmbedTokenType   = "embed_token_type"
+	ContextSourceType       = "source_type"
+	ContextSourceAppID      = "source_app_id"
+	ContextExternalSystem   = "external_system"
+	ContextExternalUserID   = "external_user_id"
+	ContextExternalTokenRef = "external_token_ref"
 )
 
 // APIKeyAuth API Key 认证中间件（用于 Embed API）
@@ -149,6 +157,56 @@ func CheckScope(requiredScope string) gin.HandlerFunc {
 			"message": "API key does not have the required scope: " + requiredScope,
 		})
 		c.Abort()
+	}
+}
+
+// EmbedTokenAuth easp-api-token 认证中间件：嵌入式助手短 Token 复用 EASP 用户/角色/工具/Skill 权限体系。
+func EmbedTokenAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenStr := strings.TrimSpace(c.GetHeader("easp-api-token"))
+		if tokenStr == "" {
+			tokenStr = strings.TrimSpace(c.GetHeader("Easp-Api-Token"))
+		}
+		if tokenStr == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "EASP_API_TOKEN_REQUIRED", "message": "easp-api-token header is required"})
+			c.Abort()
+			return
+		}
+
+		claims, err := auth.ParseEmbedToken(tokenStr)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "INVALID_EASP_API_TOKEN", "message": "Invalid or expired easp-api-token"})
+			c.Abort()
+			return
+		}
+
+		c.Set(ContextUserID, claims.UserID)
+		c.Set(ContextTenantID, claims.TenantID)
+		c.Set(ContextEmail, claims.Email)
+		roleIDs := "[]"
+		var roleRows []models.Role
+		if err := database.DB.Select(&roleRows, `SELECT r.* FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = ?`, claims.UserID); err == nil {
+			ids := make([]string, 0, len(roleRows))
+			for _, r := range roleRows {
+				ids = append(ids, r.ID)
+			}
+			if b, err := json.Marshal(ids); err == nil {
+				roleIDs = string(b)
+			}
+		}
+		c.Set(ContextRoleIDs, roleIDs)
+		c.Set(ContextEmbedTenantID, claims.TenantID)
+		c.Set(ContextEmbedUserID, claims.UserID)
+		c.Set(ContextEmbedTokenType, "embed")
+		c.Set(ContextSourceType, "embed")
+		c.Set(ContextSourceAppID, claims.AppID)
+		c.Set(ContextExternalSystem, claims.ExternalSystem)
+		c.Set(ContextExternalUserID, claims.ExternalUserID)
+		c.Set(ContextExternalTokenRef, claims.ExternalTokenRef)
+		if externalToken, ok := auth.GetEmbedExternalUserToken(claims.ExternalTokenRef); ok {
+			c.Request = c.Request.WithContext(mcp.WithUserSSOToken(c.Request.Context(), externalToken))
+		}
+		c.Next()
 	}
 }
 

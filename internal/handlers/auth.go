@@ -33,6 +33,7 @@ func NewAuthHandler() *AuthHandler {
 // RegisterRequest 注册请求
 type RegisterRequest struct {
 	TenantID    string `json:"tenant_id" binding:"required"`
+	Account     string `json:"account" binding:"required"`
 	Email       string `json:"email"`
 	Phone       string `json:"phone"`
 	Password    string `json:"password" binding:"required,min=6"`
@@ -41,8 +42,9 @@ type RegisterRequest struct {
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
+	Account  string `json:"account"`
+	Email    string `json:"email"` // 兼容旧前端：作为 account 处理
+	Phone    string `json:"phone"` // 兼容旧前端：作为 account 处理
 	TenantID string `json:"tenant_id"`
 	Password string `json:"password" binding:"required"`
 }
@@ -59,27 +61,28 @@ func normalizePhone(phone string) string {
 	return phoneCleanupRegexp.ReplaceAllString(strings.TrimSpace(phone), "")
 }
 
+func normalizeAccountIdentifier(account string) string {
+	return strings.ToLower(strings.TrimSpace(account))
+}
+
 func NormalizeLoginIdentifier(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if strings.Contains(value, "@") {
-		return normalizeEmail(value)
-	}
-	return normalizePhone(value)
+	return normalizeAccountIdentifier(value)
 }
 
 func (r *RegisterRequest) NormalizeAndValidateIdentity() error {
+	r.Account = normalizeAccountIdentifier(r.Account)
 	r.Email = normalizeEmail(r.Email)
 	r.Phone = normalizePhone(r.Phone)
-	if r.Email == "" && r.Phone == "" {
-		return errors.New("email or phone is required")
+	if r.Account == "" {
+		return errors.New("account is required")
 	}
 	return nil
 }
 
 func (r LoginRequest) NormalizedIdentifier() string {
+	if r.Account != "" {
+		return NormalizeLoginIdentifier(r.Account)
+	}
 	if r.Email != "" {
 		return NormalizeLoginIdentifier(r.Email)
 	}
@@ -124,7 +127,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	if err := req.NormalizeAndValidateIdentity(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email or phone is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Account is required"})
 		return
 	}
 
@@ -136,18 +139,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// 检查租户内邮箱/手机号是否已存在
-	if req.Email != "" {
-		if existingUser, _ := h.userRepo.GetByTenantAndEmail(req.TenantID, req.Email); existingUser != nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered in this tenant"})
-			return
-		}
-	}
-	if req.Phone != "" {
-		if existingUser, _ := h.userRepo.GetByTenantAndPhone(req.TenantID, req.Phone); existingUser != nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "Phone already registered in this tenant"})
-			return
-		}
+	// 检查租户内账号是否已存在；邮箱/手机号只是用户属性，不参与唯一性校验
+	if existingUser, _ := h.userRepo.GetByTenantAndAccount(req.TenantID, req.Account); existingUser != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Account already registered in this tenant"})
+		return
 	}
 
 	// 检查租户状态
@@ -183,14 +178,15 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	user := &models.User{
 		ID:           uuid.New().String(),
 		TenantID:     tenant.ID,
+		Account:      req.Account,
 		Email:        req.Email,
 		DisplayName:  req.DisplayName,
 		Phone:        req.Phone,
 		PasswordHash: string(passwordHash),
 		Status:       "active",
-		
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	if err := h.userRepo.Create(user); err != nil {
@@ -219,11 +215,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	identifier := req.NormalizedIdentifier()
 	if identifier == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email or phone is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Account is required"})
 		return
 	}
 
-	// 按邮箱或手机号查找用户；未指定租户且匹配多个租户时要求使用租户专属登录地址
+	// 按账号查找用户；未指定租户且匹配多个租户时要求使用租户专属登录地址
 	users, err := h.userRepo.ListByIdentifier(identifier)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid account or password"})
@@ -321,6 +317,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
 			"id":           user.ID,
+			"user_uid":     user.UserUID,
+			"account":      user.Account,
 			"tenant_id":    user.TenantID,
 			"email":        user.Email,
 			"phone":        user.Phone,
@@ -395,6 +393,8 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":           user.ID,
+		"user_uid":     user.UserUID,
+		"account":      user.Account,
 		"tenant_id":    user.TenantID,
 		"email":        user.Email,
 		"display_name": user.DisplayName,
@@ -529,13 +529,14 @@ func InitAdmin() {
 	admin = &models.User{
 		ID:           uuid.New().String(),
 		TenantID:     tenantID,
+		Account:      "admin",
 		Email:        "admin@easp.com",
 		DisplayName:  "Administrator",
 		PasswordHash: string(passwordHash),
 		Status:       "active",
-		
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	if err := userRepo.Create(admin); err != nil {

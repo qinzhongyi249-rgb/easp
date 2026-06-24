@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -63,6 +64,9 @@ func NewUserRepository() *UserRepository {
 
 func (r *UserRepository) Create(user *models.User) error {
 	user.ID = uuid.New().String()
+	if user.UserUID == "" {
+		user.UserUID = "usr_" + strings.ReplaceAll(user.ID, "-", "")
+	}
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
 	setUserUniqueKeys(user)
@@ -71,8 +75,8 @@ func (r *UserRepository) Create(user *models.User) error {
 		user.Metadata = &defaultMeta
 	}
 
-	query := `INSERT INTO users (id, tenant_id, email, email_unique_key, display_name, avatar, phone, phone_unique_key, status, password_hash, sso_provider, sso_user_id, sso_linked_at, metadata, last_login_at, login_count, deleted_at, created_at, updated_at)
-			  VALUES (:id, :tenant_id, :email, :email_unique_key, :display_name, :avatar, :phone, :phone_unique_key, :status, :password_hash, :sso_provider, :sso_user_id, :sso_linked_at, :metadata, :last_login_at, :login_count, :deleted_at, :created_at, :updated_at)`
+	query := `INSERT INTO users (id, user_uid, account, account_unique_key, tenant_id, email, email_unique_key, display_name, avatar, phone, phone_unique_key, status, password_hash, sso_provider, sso_user_id, sso_linked_at, metadata, profile, attributes, last_login_at, login_count, deleted_at, created_at, updated_at)
+			  VALUES (:id, :user_uid, :account, :account_unique_key, :tenant_id, :email, :email_unique_key, :display_name, :avatar, :phone, :phone_unique_key, :status, :password_hash, :sso_provider, :sso_user_id, :sso_linked_at, :metadata, :profile, :attributes, :last_login_at, :login_count, :deleted_at, :created_at, :updated_at)`
 	_, err := database.DB.NamedExec(query, user)
 	return err
 }
@@ -122,50 +126,96 @@ func (r *UserRepository) GetByTenantAndPhone(tenantID, phone string) (*models.Us
 	return &user, nil
 }
 
+func (r *UserRepository) GetByTenantAndAccount(tenantID, account string) (*models.User, error) {
+	var user models.User
+	err := database.DB.Get(&user, "SELECT * FROM users WHERE tenant_id = ? AND account = ? AND deleted_at IS NULL", tenantID, normalizeAccount(account))
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r *UserRepository) ListByIdentifier(identifier string) ([]models.User, error) {
+	identifier = normalizeAccount(identifier)
 	if identifier == "" {
 		return nil, sql.ErrNoRows
 	}
 	var users []models.User
-	query := `SELECT * FROM users WHERE deleted_at IS NULL AND (email = ? OR phone = ?) ORDER BY created_at DESC`
-	err := database.DB.Select(&users, query, identifier, identifier)
+	query := `SELECT * FROM users WHERE deleted_at IS NULL AND account = ? ORDER BY created_at DESC`
+	err := database.DB.Select(&users, query, identifier)
 	return users, err
 }
 
 func (r *UserRepository) ListByTenant(tenantID string) ([]models.User, error) {
 	var users []models.User
-	err := database.DB.Select(&users, "SELECT * FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", tenantID)
+	err := database.DB.Select(&users, "SELECT id, tenant_id, COALESCE(account,'') AS account, account_unique_key, COALESCE(email,'') AS email, email_unique_key, COALESCE(phone,'') AS phone, phone_unique_key, COALESCE(avatar,'') AS avatar, COALESCE(display_name,'') AS display_name, COALESCE(password_hash,'') AS password_hash, COALESCE(status,'active') AS status, COALESCE(sso_provider,'') AS sso_provider, COALESCE(sso_user_id,'') AS sso_user_id, sso_linked_at, last_login_at, login_count, deleted_at, COALESCE(user_uid,'') AS user_uid, profile, attributes, metadata, created_at, updated_at FROM users WHERE tenant_id = ? AND deleted_at IS NULL ORDER BY created_at DESC", tenantID)
+	return users, err
+}
+
+func (r *UserRepository) SearchByTenant(tenantID, keyword, status string, limit int) ([]models.User, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	args := []any{tenantID}
+	where := "tenant_id = ? AND deleted_at IS NULL"
+	if status != "" {
+		where += " AND status = ?"
+		args = append(args, status)
+	}
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		where += " AND (account LIKE ? OR user_uid LIKE ? OR email LIKE ? OR phone LIKE ? OR display_name LIKE ?)"
+		args = append(args, like, like, like, like, like)
+	}
+	args = append(args, limit)
+	var users []models.User
+	err := database.DB.Select(&users, "SELECT id, tenant_id, COALESCE(account,'') AS account, account_unique_key, COALESCE(email,'') AS email, email_unique_key, COALESCE(phone,'') AS phone, phone_unique_key, COALESCE(avatar,'') AS avatar, COALESCE(display_name,'') AS display_name, COALESCE(password_hash,'') AS password_hash, COALESCE(status,'active') AS status, COALESCE(sso_provider,'') AS sso_provider, COALESCE(sso_user_id,'') AS sso_user_id, sso_linked_at, last_login_at, login_count, deleted_at, COALESCE(user_uid,'') AS user_uid, profile, attributes, metadata, created_at, updated_at FROM users WHERE "+where+" ORDER BY created_at DESC LIMIT ?", args...)
 	return users, err
 }
 
 // ListByTenantIncludeDeleted 列出租户下所有用户（含已删除）
 func (r *UserRepository) ListByTenantIncludeDeleted(tenantID string) ([]models.User, error) {
 	var users []models.User
-	err := database.DB.Select(&users, "SELECT * FROM users WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
+	err := database.DB.Select(&users, "SELECT id, tenant_id, COALESCE(account,'') AS account, account_unique_key, COALESCE(email,'') AS email, email_unique_key, COALESCE(phone,'') AS phone, phone_unique_key, COALESCE(avatar,'') AS avatar, COALESCE(display_name,'') AS display_name, COALESCE(password_hash,'') AS password_hash, COALESCE(status,'active') AS status, COALESCE(sso_provider,'') AS sso_provider, COALESCE(sso_user_id,'') AS sso_user_id, sso_linked_at, last_login_at, login_count, deleted_at, COALESCE(user_uid,'') AS user_uid, profile, attributes, metadata, created_at, updated_at FROM users WHERE tenant_id = ? ORDER BY created_at DESC", tenantID)
 	return users, err
 }
 
 func (r *UserRepository) Update(user *models.User) error {
 	user.UpdatedAt = time.Now()
 	setUserUniqueKeys(user)
-	query := `UPDATE users SET email=:email, email_unique_key=:email_unique_key, display_name=:display_name, avatar=:avatar, phone=:phone, phone_unique_key=:phone_unique_key,
-			  status=:status, password_hash=:password_hash, metadata=:metadata, last_login_at=:last_login_at, login_count=:login_count, updated_at=:updated_at
+	query := `UPDATE users SET account=:account, account_unique_key=:account_unique_key, email=:email, email_unique_key=:email_unique_key, display_name=:display_name, avatar=:avatar, phone=:phone, phone_unique_key=:phone_unique_key,
+			  status=:status, password_hash=:password_hash, metadata=:metadata, profile=:profile, attributes=:attributes, last_login_at=:last_login_at, login_count=:login_count, updated_at=:updated_at
 			  WHERE id=:id`
 	_, err := database.DB.NamedExec(query, user)
 	return err
 }
 
+func normalizeAccount(account string) string {
+	return strings.ToLower(strings.TrimSpace(account))
+}
+
 func setUserUniqueKeys(user *models.User) {
+	if strings.TrimSpace(user.Account) == "" {
+		user.Account = firstNonEmpty(user.Email, user.Phone, user.UserUID)
+	}
+	user.Account = normalizeAccount(user.Account)
+	user.AccountUniqueKey = nil
+	if user.Account != "" {
+		v := user.TenantID + ":" + user.Account
+		user.AccountUniqueKey = &v
+	}
+	// 邮箱和手机号是用户属性，不再参与唯一性约束。保留历史字段但始终置空。
 	user.EmailUniqueKey = nil
-	if user.Email != "" {
-		v := user.TenantID + ":" + user.Email
-		user.EmailUniqueKey = &v
-	}
 	user.PhoneUniqueKey = nil
-	if user.Phone != "" {
-		v := user.TenantID + ":" + user.Phone
-		user.PhoneUniqueKey = &v
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
 	}
+	return ""
 }
 
 // Delete 软删除用户（设置 deleted_at）

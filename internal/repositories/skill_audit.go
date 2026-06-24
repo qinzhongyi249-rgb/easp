@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -96,26 +97,67 @@ func (r *AuditLogRepository) Create(log *models.AuditLog) error {
 	log.ID = uuid.New().String()
 	log.CreatedAt = time.Now()
 
-	query := `INSERT INTO audit_logs (id, tenant_id, user_id, agent_id, tool, action, resource, detail, decision, result, duration_ms, ip, user_agent, created_at)
-			  VALUES (:id, :tenant_id, :user_id, :agent_id, :tool, :action, :resource, :detail, :decision, :result, :duration_ms, :ip, :user_agent, :created_at)`
+	query := `INSERT INTO audit_logs (id, tenant_id, user_id, user_uid, agent_id, source_type, source_app_id, external_system, external_user_id, tool, action, resource, detail, decision, result, duration_ms, ip, user_agent, created_at)
+			  VALUES (:id, :tenant_id, :user_id, :user_uid, :agent_id, :source_type, :source_app_id, :external_system, :external_user_id, :tool, :action, :resource, :detail, :decision, :result, :duration_ms, :ip, :user_agent, :created_at)`
 	_, err := database.DB.NamedExec(query, log)
 	return err
 }
 
+type AuditLogFilter struct {
+	SourceType     string
+	SourceAppID    string
+	ExternalSystem string
+	ExternalUserID string
+	UserUID        string
+	UserID         string
+	Tool           string
+	Action         string
+}
+
 func (r *AuditLogRepository) ListByTenant(tenantID string, limit, offset int) ([]models.AuditLog, error) {
-	var logs []models.AuditLog
-	err := database.DB.Select(&logs, "SELECT * FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?", tenantID, limit, offset)
+	return r.SearchByTenant(tenantID, AuditLogFilter{}, limit, offset)
+}
+
+func (r *AuditLogRepository) SearchByTenant(tenantID string, filter AuditLogFilter, limit, offset int) ([]models.AuditLog, error) {
+	logs := make([]models.AuditLog, 0)
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where := []string{"tenant_id = ?"}
+	args := []any{tenantID}
+	addEq := func(column, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		where = append(where, column+" = ?")
+		args = append(args, value)
+	}
+	addEq("source_type", filter.SourceType)
+	addEq("source_app_id", filter.SourceAppID)
+	addEq("external_system", filter.ExternalSystem)
+	addEq("external_user_id", filter.ExternalUserID)
+	addEq("user_uid", filter.UserUID)
+	addEq("user_id", filter.UserID)
+	addEq("tool", filter.Tool)
+	addEq("action", filter.Action)
+	args = append(args, limit, offset)
+	query := "SELECT * FROM audit_logs WHERE " + strings.Join(where, " AND ") + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	err := database.DB.Select(&logs, query, args...)
 	return logs, err
 }
 
 func (r *AuditLogRepository) ListByUser(userID string, limit, offset int) ([]models.AuditLog, error) {
-	var logs []models.AuditLog
+	logs := make([]models.AuditLog, 0)
 	err := database.DB.Select(&logs, "SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?", userID, limit, offset)
 	return logs, err
 }
 
 func (r *AuditLogRepository) ListByTool(tenantID, tool string, limit int) ([]models.AuditLog, error) {
-	var logs []models.AuditLog
+	logs := make([]models.AuditLog, 0)
 	err := database.DB.Select(&logs, "SELECT * FROM audit_logs WHERE tenant_id = ? AND tool = ? ORDER BY created_at DESC LIMIT ?", tenantID, tool, limit)
 	return logs, err
 }

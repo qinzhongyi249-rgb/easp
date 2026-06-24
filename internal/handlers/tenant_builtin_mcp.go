@@ -122,10 +122,10 @@ func EnsureTenantBuiltinMCPTools(tenantID string) ([]string, error) {
 	connectorID := builtinConnectorID(tenantID)
 	now := time.Now()
 	_, err := database.DB.Exec(`
-		INSERT INTO connectors (id, tenant_id, name, type, base_url, status, tools_count, created_at, updated_at)
-		VALUES (?, ?, ?, 'builtin', 'internal://easp', 'active', ?, ?, ?)
+		INSERT INTO connectors (id, tenant_id, name, type, base_url, status, tools_count, is_builtin, locked, created_at, updated_at)
+		VALUES (?, ?, ?, 'builtin', 'internal://easp', 'active', ?, 1, 1, ?, ?)
 		ON DUPLICATE KEY UPDATE
-			name = VALUES(name), type = VALUES(type), base_url = VALUES(base_url), status = 'active', tools_count = VALUES(tools_count), updated_at = VALUES(updated_at)`,
+			name = VALUES(name), type = VALUES(type), base_url = VALUES(base_url), status = 'active', tools_count = VALUES(tools_count), is_builtin = 1, locked = 1, updated_at = VALUES(updated_at)`,
 		connectorID, tenantID, builtinGovernanceConnectorName, len(TenantBuiltinMCPToolDefinitions()), now, now)
 	if err != nil {
 		return nil, fmt.Errorf("ensure builtin connector: %w", err)
@@ -246,6 +246,13 @@ func GetLockedBuiltinMCPToolIDs(tenantID string) ([]string, error) {
 func EnsureMCPToolMutable(tool *models.MCPTool) error {
 	if tool != nil && (tool.Locked || tool.IsBuiltin) {
 		return errors.New("内置锁定 MCP 工具不可编辑、停用或删除")
+	}
+	return nil
+}
+
+func EnsureConnectorMutable(connector *models.Connector) error {
+	if connector != nil && (connector.Locked || connector.IsBuiltin || connector.Type == "builtin") {
+		return errors.New("内置锁定连接器不可编辑、停用或删除")
 	}
 	return nil
 }

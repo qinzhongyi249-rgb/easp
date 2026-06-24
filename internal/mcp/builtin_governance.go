@@ -393,9 +393,12 @@ func builtinUpdateSkill(ctx context.Context, tenantID string, args map[string]in
 	if skillID == "" {
 		return nil, fmt.Errorf("skill_id is required")
 	}
-	var exists string
-	if err := database.DB.GetContext(ctx, &exists, "SELECT id FROM skills WHERE id = ? AND tenant_id = ?", skillID, tenantID); err != nil {
+	var createdBy sql.NullString
+	if err := database.DB.QueryRowContext(ctx, "SELECT created_by FROM skills WHERE id = ? AND tenant_id = ?", skillID, tenantID).Scan(&createdBy); err != nil {
 		return nil, fmt.Errorf("skill not found in tenant")
+	}
+	if createdBy.Valid && strings.EqualFold(strings.TrimSpace(createdBy.String), "system") {
+		return nil, fmt.Errorf("内置锁定 Skill 不可编辑、停用或删除")
 	}
 	sets := []string{}
 	qargs := []interface{}{}

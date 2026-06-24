@@ -8,6 +8,9 @@ import (
 )
 
 func contextWithUserSSOToken(ctx context.Context, tenantID, userID string) context.Context {
+	if token, ok := mcp.UserSSOTokenFromContext(ctx); ok && token != "" {
+		return ctx
+	}
 	if tenantID == "" || userID == "" {
 		return ctx
 	}

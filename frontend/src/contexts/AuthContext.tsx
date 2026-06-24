@@ -41,8 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadUser]);
 
   const login = async (identifier: string, password: string, tenantId?: string) => {
-    const field = identifier.includes('@') ? 'email' : 'phone';
-    const res = await authApi.login({ [field]: identifier, password, tenant_id: tenantId });
+    const res = await authApi.login({ account: identifier, password, tenant_id: tenantId });
     const data = res.data as { user: User; tokens: { access_token: string; refresh_token: string } };
     localStorage.setItem('access_token', data.tokens.access_token);
     localStorage.setItem('refresh_token', data.tokens.refresh_token);

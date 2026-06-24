@@ -117,7 +117,7 @@ EASP 当前通过 OpenAI 兼容 API 调用外部/内网模型，本身不要求 
   └── backups/                 # 本地临时备份，可接对象存储
 
 /etc/nginx/conf.d/easp.conf    # Nginx 配置
-/etc/systemd/system/easp.service # systemd 服务，推荐生产使用
+/etc/systemd/system/easp-server.service # systemd 服务，推荐生产使用；当前开发环境已启用
 /var/lib/mysql 或云 RDS          # MySQL 数据
 ```
 
@@ -485,6 +485,12 @@ curl -fsS https://easp.example.com/health
 - 用户信息接口
 - 响应字段映射
 - 登录后同步用户
+
+用户开通策略必须由后端配置控制：
+
+- `auto_create_user=false`：第三方 SSO 登录成功但 EASP 内没有对应用户时，拒绝签发 EASP Token，返回 `USER_NOT_PROVISIONED`，提示联系管理员开通。
+- `auto_create_user=true`：第三方 SSO 登录成功但 EASP 内没有对应用户时，自动创建 active 用户。
+- `default_role_ids`：自动创建用户时分配的租户角色 ID 列表；未配置时才回退到当前租户“普通用户”角色。
 
 SSO Token 透传是连接器可选能力，不是默认行为。无用户 SSO Token 时必须明确报错，不应降级为固定凭据。
 

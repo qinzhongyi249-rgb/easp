@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tabs, Tag, Select, Dropdown } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined, TeamOutlined, MoreOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tabs, Tag, Select, Dropdown, Alert, Card, Statistic, Steps, Divider } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined, TeamOutlined, MoreOutlined, KeyOutlined, ToolOutlined, AppstoreOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Role } from '../api/role';
 import { roleApi } from '../api/role';
@@ -167,6 +167,62 @@ const Roles: React.FC = () => {
     setModalOpen(true);
   };
 
+  const countJsonArray = (value?: string) => {
+    if (!value) return 0;
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.length : 0;
+    } catch { return 0; }
+  };
+
+  const hasWildcardTools = (value?: string) => {
+    if (!value) return false;
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) && parsed.includes('*');
+    } catch { return false; }
+  };
+
+  const roleSummary = {
+    tenant: tenantRoles.length,
+    system: systemRoles.length,
+    wildcard: tenantRoles.filter(r => hasWildcardTools(r.tools)).length,
+    mcpGranted: tenantRoles.reduce((sum, r) => sum + countJsonArray(r.allowed_mcp_tools), 0),
+    skillGranted: tenantRoles.reduce((sum, r) => sum + countJsonArray(r.allowed_skills), 0),
+  };
+
+  const renderRoleCard = (role: Role) => {
+    const menuCount = hasWildcardTools(role.tools) ? '全部' : countJsonArray(role.tools);
+    const mcpCount = countJsonArray(role.allowed_mcp_tools);
+    const skillCount = countJsonArray(role.allowed_skills);
+    return (
+      <Card key={role.id} size="small" hoverable>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Space wrap>
+            <Text strong>{role.name}</Text>
+            {role.is_default && <Tag color="blue">默认</Tag>}
+            {hasWildcardTools(role.tools) && <Tag color="gold">全功能</Tag>}
+          </Space>
+          {role.description && <Text type="secondary">{role.description}</Text>}
+          <Space wrap size={[4, 4]}>
+            <Tag icon={<AppstoreOutlined />} color="blue">菜单 {menuCount}</Tag>
+            <Tag icon={<ToolOutlined />} color="orange">MCP {mcpCount}</Tag>
+            <Tag icon={<KeyOutlined />} color="purple">Skill {skillCount}</Tag>
+            <Tag>{DATA_SCOPE_OPTIONS.find(o => o.value === role.data_scope)?.label || role.data_scope || '数据未配置'}</Tag>
+          </Space>
+          <Space wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openModal(role)}>配置授权</Button>
+            {!role.is_default && (
+              <Popconfirm title="确认删除?" onConfirm={() => onDelete(role.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            )}
+          </Space>
+        </Space>
+      </Card>
+    );
+  };
+
   const tenantColumns = [
     { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, r: Role) => (
       <Space direction={isMobile ? 'vertical' : 'horizontal'} size={4}>
@@ -249,31 +305,37 @@ const Roles: React.FC = () => {
       key: 'tenant',
       label: <span><TeamOutlined /> 租户角色</span>,
       children: (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12 }}>
+            <Text type="secondary">租户角色负责菜单可见、MCP 工具、Skill、数据范围和限流授权。</Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>新建角色</Button>
           </div>
-          <Table 
-            dataSource={tenantRoles} 
-            columns={tenantColumns} 
-            rowKey="id" 
-            loading={loading} 
-            pagination={false}
-            size={isMobile ? 'small' : 'middle'}
-            scroll={isMobile ? { x: 300 } : undefined}
-          />
-        </>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+            {tenantRoles.map(renderRoleCard)}
+          </div>
+          <Card title="角色明细" extra={<Text type="secondary">用于查看完整授权字段</Text>}>
+            <Table
+              dataSource={tenantRoles}
+              columns={tenantColumns}
+              rowKey="id"
+              loading={loading}
+              pagination={false}
+              size={isMobile ? 'small' : 'middle'}
+              scroll={isMobile ? { x: 300 } : undefined}
+            />
+          </Card>
+        </Space>
       ),
     },
     ...(isAdmin ? [{
       key: 'system',
       label: <span><SafetyCertificateOutlined /> 系统角色</span>,
       children: (
-        <Table 
-          dataSource={systemRoles} 
-          columns={systemColumns} 
-          rowKey="id" 
-          loading={loading} 
+        <Table
+          dataSource={systemRoles}
+          columns={systemColumns}
+          rowKey="id"
+          loading={loading}
           pagination={false}
           size={isMobile ? 'small' : 'middle'}
           scroll={isMobile ? { x: 300 } : undefined}
@@ -284,22 +346,62 @@ const Roles: React.FC = () => {
 
   return (
     <div>
-      <Title level={isMobile ? 4 : 3}>角色管理</Title>
-      <Tabs items={tabItems} defaultActiveKey="tenant" size={isMobile ? 'small' : 'middle'} />
-      <Modal 
-        title={editing ? '编辑角色' : '新建角色'} 
-        open={modalOpen} 
-        onOk={onOk} 
+      <div style={{ marginBottom: 16 }}>
+        <Title level={isMobile ? 4 : 3} style={{ marginBottom: 4 }}><SafetyCertificateOutlined /> 授权工作台</Title>
+        <Text type="secondary">统一配置角色的菜单权限、MCP 工具权限、Skill 权限、数据范围和限流。工具/Skill 获取与执行链路都会按这里的授权判断。</Text>
+      </div>
+
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="授权闭环：先导入并发布工具/Skill，再在角色中授权，最后由 AI 助手按权限暴露和执行。"
+          description="前端菜单只负责展示入口；真正的 MCP/Skill 可用性由后端根据用户角色实时过滤。"
+        />
+        <Card>
+          <Steps
+            size="small"
+            direction={isMobile ? 'vertical' : 'horizontal'}
+            items={[
+              { title: '选择角色', description: '租户角色或系统角色' },
+              { title: '菜单入口', description: '控制后台功能可见' },
+              { title: '工具与 Skill', description: '控制助手可调用能力' },
+              { title: '数据与限流', description: '控制访问边界' },
+            ]}
+          />
+        </Card>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(5, minmax(0, 1fr))', gap: 12 }}>
+          <Card><Statistic title="租户角色" value={roleSummary.tenant} prefix={<TeamOutlined />} /></Card>
+          <Card><Statistic title="系统角色" value={roleSummary.system} prefix={<SafetyCertificateOutlined />} /></Card>
+          <Card><Statistic title="全功能角色" value={roleSummary.wildcard} prefix={<CheckCircleOutlined />} /></Card>
+          <Card><Statistic title="MCP授权项" value={roleSummary.mcpGranted} prefix={<ToolOutlined />} /></Card>
+          <Card><Statistic title="Skill授权项" value={roleSummary.skillGranted} prefix={<KeyOutlined />} /></Card>
+        </div>
+        <Tabs items={tabItems} defaultActiveKey="tenant" size={isMobile ? 'small' : 'middle'} />
+      </Space>
+      <Modal
+        title={editing ? `配置授权 — ${editing.name}` : '新建授权角色'}
+        open={modalOpen}
+        onOk={onOk}
         onCancel={() => setModalOpen(false)}
-        width={isMobile ? '90%' : 600}
+        width={isMobile ? '92%' : 780}
       >
         <Form form={form} layout="vertical" size={isMobile ? 'middle' : 'large'}>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="这里同时配置后台入口和助手能力授权。"
+            description="菜单权限影响前端入口可见；MCP/Skill 权限影响 AI 助手获取、暴露和执行工具的后端判断。"
+          />
+          <Divider>角色基础信息</Divider>
           <Form.Item name="name" label="角色名称" rules={[{ required: true, message: '请输入角色名称' }]}>
             <Input placeholder="如：开发者、运维人员、访客" />
           </Form.Item>
           <Form.Item name="description" label="角色描述">
             <Input.TextArea rows={2} placeholder="描述该角色的职责和权限范围" />
           </Form.Item>
+          <Divider>后台菜单入口</Divider>
           <Form.Item name="tools" label="功能权限" extra="选择该角色可以使用的功能模块（UI菜单权限）">
             <Select
               mode="multiple"
@@ -325,6 +427,14 @@ const Roles: React.FC = () => {
               allowClear
             />
           </Form.Item>
+          <Divider>助手可调用能力</Divider>
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="只选择生产可授权资源。"
+            description="草稿、测试中、停用的工具/Skill 不应出现在生产授权列表；管理员角色会自动保留内置锁定工具。"
+          />
           <Form.Item name="allowed_mcp_tools" label="MCP工具权限" extra="仅可选择已启用且已发布的MCP工具；测试中/草稿/停用不会出现在这里，也不会被AI助手生产调用。">
             <Select
               mode="multiple"
@@ -373,6 +483,7 @@ const Roles: React.FC = () => {
               notFoundContent="暂无技能"
             />
           </Form.Item>
+          <Divider>数据边界与调用频率</Divider>
           <Form.Item label="访问频率限制">
             <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
               <Select

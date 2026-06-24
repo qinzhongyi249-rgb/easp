@@ -6,7 +6,6 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import MainLayout from './layouts/MainLayout';
 
 const Login = lazy(() => import('./pages/Login'));
-const TenantLogin = lazy(() => import('./pages/TenantLogin'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Tenants = lazy(() => import('./pages/Tenants'));
 const Users = lazy(() => import('./pages/Users'));
@@ -37,7 +36,7 @@ const AppRoutes = () => {
     <Suspense fallback={null}>
       <Routes>
         <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
-        <Route path="/sso/:tenantId" element={<TenantLogin />} />
+        <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
         <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />

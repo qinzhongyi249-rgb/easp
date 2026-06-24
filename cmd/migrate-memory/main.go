@@ -8,12 +8,9 @@ import (
 )
 
 func main() {
-	dbConfig := database.Config{
-		Host:     "rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei.rds.aliyuncs.com",
-		Port:     3306,
-		User:     "easp_dev",
-		Password: "Easp_dev123",
-		Database: "easp_dev",
+	dbConfig, err := database.ConfigFromEnv()
+	if err != nil {
+		log.Fatalf("Invalid database configuration: %v", err)
 	}
 
 	if err := database.Init(dbConfig); err != nil {

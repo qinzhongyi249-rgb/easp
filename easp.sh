@@ -1,6 +1,7 @@
 #!/bin/bash
 
 APP_NAME="easp-server"
+SERVICE_NAME="easp-server.service"
 APP_DIR="/home/workCode/easp"
 PID_FILE="/tmp/easp-server.pid"
 LOG_DIR="${EASP_LOG_DIR:-$APP_DIR/logs}"
@@ -22,15 +23,38 @@ ensure_log_dir() {
     mkdir -p "$LOG_DIR"
 }
 
+use_systemd_service() {
+    command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/$SERVICE_NAME" ]
+}
+
 get_pid() {
     if [ -f "$PID_FILE" ]; then
-        cat "$PID_FILE"
-    else
-        pgrep -f "$APP_NAME" 2>/dev/null
+        PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            COMM=$(ps -p "$PID" -o comm= 2>/dev/null | tr -d ' ')
+            if [ "$COMM" = "$APP_NAME" ]; then
+                echo "$PID"
+                return 0
+            fi
+        fi
     fi
+    pgrep -x "$APP_NAME" 2>/dev/null | head -n 1
 }
 
 status() {
+    if use_systemd_service; then
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            PID=$(systemctl show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null)
+            echo -e "${GREEN}✓ $APP_NAME is running via systemd (PID: $PID) on port 8082${NC}"
+            echo -e "${GREEN}  Service: $SERVICE_NAME${NC}"
+            echo -e "${GREEN}  Logs: $LOG_DIR${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}✗ $SERVICE_NAME is not running${NC}"
+            return 1
+        fi
+    fi
+
     PID=$(get_pid)
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         echo -e "${GREEN}✓ $APP_NAME is running (PID: $PID) on port 8082${NC}"
@@ -43,6 +67,14 @@ status() {
 }
 
 stop() {
+    if use_systemd_service; then
+        echo -e "${YELLOW}Stopping $SERVICE_NAME...${NC}"
+        systemctl stop "$SERVICE_NAME"
+        rm -f "$PID_FILE"
+        echo -e "${GREEN}✓ $SERVICE_NAME stopped${NC}"
+        return 0
+    fi
+
     PID=$(get_pid)
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         echo -e "${YELLOW}Stopping $APP_NAME (PID: $PID)...${NC}"
@@ -60,6 +92,15 @@ stop() {
 }
 
 start() {
+    if use_systemd_service; then
+        ensure_log_dir
+        echo -e "${GREEN}Starting $SERVICE_NAME on port 8082...${NC}"
+        systemctl start "$SERVICE_NAME"
+        sleep 1
+        status
+        return $?
+    fi
+
     stop
     ensure_log_dir
 
@@ -85,6 +126,15 @@ start() {
 }
 
 restart() {
+    if use_systemd_service; then
+        ensure_log_dir
+        echo -e "${YELLOW}Restarting $SERVICE_NAME...${NC}"
+        systemctl restart "$SERVICE_NAME"
+        sleep 1
+        status
+        return $?
+    fi
+
     stop
     sleep 1
     start

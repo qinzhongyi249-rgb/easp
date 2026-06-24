@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm, Empty, Alert } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, BulbOutlined, PlayCircleOutlined, MoreOutlined, HistoryOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, App, Tag, Dropdown, Select, Tabs, Descriptions, Timeline, Card, Collapse, Popconfirm, Empty, Alert, Row, Col, Statistic } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, BulbOutlined, PlayCircleOutlined, MoreOutlined, HistoryOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined, EyeOutlined, LockOutlined, SafetyOutlined, PartitionOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Skill, SkillExecution, StepResult, JsonSchema } from '../api/skill';
 import { skillApi, SKILL_CATEGORIES } from '../api/skill';
@@ -52,6 +52,32 @@ interface SkillFilters {
 }
 
 const normalizeText = (value?: string | null) => (value || '').toLowerCase();
+const fmtTime = (value?: string | null) => value ? new Date(value).toLocaleString() : '-';
+const isBuiltinSkill = (skill?: Skill | null) => (skill?.created_by || '').toLowerCase() === 'system';
+
+const parseJsonArray = <T,>(value?: string | null, fallback: T[] = []): T[] => {
+  if (!value) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch { return fallback; }
+};
+
+const parseSteps = (value?: string | null): Array<{ name?: string; type?: string; action?: string }> => parseJsonArray(value, []);
+const prettyJson = (value?: string | null) => {
+  if (!value) return '无';
+  try { return JSON.stringify(JSON.parse(value), null, 2); }
+  catch { return value; }
+};
+
+const skillRisk = (skill: Skill) => {
+  const status = normalizeStatus(skill.status);
+  if (status === 'disabled') return { label: '已停用', color: 'default', reason: '技能已停用，不应进入生产授权。' };
+  if (status !== 'published') return { label: '未发布', color: 'orange', reason: '未发布技能只能沙箱/预演测试，正式执行需要发布。' };
+  if (!skill.input_schema) return { label: '缺输入Schema', color: 'gold', reason: '缺少输入参数 Schema，助手追问和执行前校验不够稳定。' };
+  if (parseSteps(skill.steps).length === 0) return { label: '无步骤', color: 'red', reason: '没有可执行步骤。' };
+  return { label: '生产可用', color: 'green', reason: '已发布且具备基础执行定义。' };
+};
 
 // 解析 JSON Schema 生成表单字段
 const parseInputSchema = (schemaStr?: string): { fields: Array<{ name: string; type: string; title: string; description?: string; required: boolean; defaultValue?: unknown }>; required: string[] } => {
@@ -149,6 +175,8 @@ const Skills: React.FC = () => {
   const [historySkill, setHistorySkill] = useState<Skill | null>(null);
   const [executions, setExecutions] = useState<SkillExecution[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [detailSkill, setDetailSkill] = useState<Skill | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const load = async () => {
     if (!currentTenant) return;
@@ -162,6 +190,10 @@ const Skills: React.FC = () => {
 
   // ========== 技能 CRUD ==========
   const openEditModal = useCallback((record?: Skill) => {
+    if (record && isBuiltinSkill(record)) {
+      message.warning('内置锁定 Skill 不可编辑');
+      return;
+    }
     if (record) {
       setEditing(record);
       // 解析 steps JSON 为可编辑字符串
@@ -196,7 +228,7 @@ const Skills: React.FC = () => {
       });
     }
     setModalOpen(true);
-  }, [form]);
+  }, [form, message]);
 
   const onOk = async () => {
     const values = await form.validateFields();
@@ -244,8 +276,12 @@ const Skills: React.FC = () => {
     } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败'); }
   };
 
-  const onDelete = async (id: string) => {
-    try { await skillApi.delete(currentTenant, id); message.success('删除成功'); load(); }
+  const onDelete = async (record: Skill) => {
+    if (isBuiltinSkill(record)) {
+      message.warning('内置锁定 Skill 不可删除');
+      return;
+    }
+    try { await skillApi.delete(currentTenant, record.id); message.success('删除成功'); load(); }
     catch { message.error('删除失败'); }
   };
 
@@ -334,38 +370,65 @@ const Skills: React.FC = () => {
     filters.hasTriggers !== undefined || filters.usageState
   );
 
+  const skillStats = useMemo(() => {
+    const published = skills.filter(s => normalizeStatus(s.status) === 'published').length;
+    const testing = skills.filter(s => normalizeStatus(s.status) === 'testing').length;
+    const disabled = skills.filter(s => normalizeStatus(s.status) === 'disabled').length;
+    const builtin = skills.filter(isBuiltinSkill).length;
+    const withSchema = skills.filter(s => Boolean(s.input_schema)).length;
+    const withTriggers = skills.filter(s => Boolean(s.triggers)).length;
+    const productionReady = skills.filter(s => skillRisk(s).label === '生产可用').length;
+    const mcpSteps = skills.filter(s => parseSteps(s.steps).some(step => step.type === 'mcp_tool')).length;
+    return { published, testing, disabled, builtin, withSchema, withTriggers, productionReady, mcpSteps };
+  }, [skills]);
+
+  const openDetail = (skill: Skill) => {
+    setDetailSkill(skill);
+    setDetailOpen(true);
+  };
+
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, r: Skill) => (
-      <Space>
-        <span>{v}</span>
-        {r.category && <Tag>{SKILL_CATEGORIES.find(c => c.value === r.category)?.label || r.category}</Tag>}
+      <Space direction="vertical" size={2}>
+        <Space wrap>
+          <Text strong>{v}</Text>
+          {r.category && <Tag>{SKILL_CATEGORIES.find(c => c.value === r.category)?.label || r.category}</Tag>}
+          {isBuiltinSkill(r) && <Tag color="purple" icon={<LockOutlined />}>内置锁定</Tag>}
+          <Tag color={skillRisk(r).color}>{skillRisk(r).label}</Tag>
+        </Space>
+        <Text type="secondary" style={{ fontSize: 12 }}>{r.description || '暂无描述'}</Text>
       </Space>
     )},
     ...(!isMobile ? [
-      { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
-      { title: '版本', dataIndex: 'version', key: 'version', width: 70 },
-      { title: '使用次数', dataIndex: 'usage_count', key: 'usage_count', width: 80 },
+      { title: '编排能力', key: 'steps', width: 150, render: (_: unknown, record: Skill) => {
+        const steps = parseSteps(record.steps);
+        const mcpCount = steps.filter(step => step.type === 'mcp_tool').length;
+        return <Space direction="vertical" size={2}><Text>{steps.length} 步</Text><Text type="secondary">MCP {mcpCount} / 输入 {parseInputSchema(record.input_schema).fields.length}</Text></Space>;
+      } },
+      { title: '使用情况', key: 'usage', width: 120, render: (_: unknown, record: Skill) => <Space direction="vertical" size={2}><Text>{record.usage_count || 0} 次</Text><Text type="secondary">{fmtTime(record.last_used_at)}</Text></Space> },
     ] : []),
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => {
       return renderStatusTag(v);
     }},
-    { title: '操作', key: 'action', width: isMobile ? 60 : 280, render: (_: unknown, record: Skill) => (
+    { title: '操作', key: 'action', width: isMobile ? 60 : 340, render: (_: unknown, record: Skill) => (
       isMobile ? (
         <Dropdown menu={{ items: [
+          { key: 'detail', label: '详情', icon: <EyeOutlined />, onClick: () => openDetail(record) },
           { key: 'execute', label: '执行', icon: <PlayCircleOutlined />, onClick: () => openExecModal(record) },
           { key: 'history', label: '历史', icon: <HistoryOutlined />, onClick: () => openHistory(record) },
-          { key: 'edit', label: '编辑', icon: <EditOutlined />, onClick: () => openEditModal(record) },
-          { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDelete(record.id) },
+          { key: 'edit', label: isBuiltinSkill(record) ? '内置不可编辑' : '编辑', icon: <EditOutlined />, disabled: isBuiltinSkill(record), onClick: () => openEditModal(record) },
+          { key: 'delete', label: isBuiltinSkill(record) ? '内置不可删除' : '删除', icon: <DeleteOutlined />, danger: true, disabled: isBuiltinSkill(record), onClick: () => onDelete(record) },
         ]}} trigger={['click']}>
           <Button type="text" icon={<MoreOutlined />} />
         </Dropdown>
       ) : (
         <Space>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(record)}>详情</Button>
           <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => openExecModal(record)}>执行</Button>
           <Button size="small" icon={<HistoryOutlined />} onClick={() => openHistory(record)}>历史</Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)}>编辑</Button>
-          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          <Button size="small" icon={<EditOutlined />} disabled={isBuiltinSkill(record)} onClick={() => openEditModal(record)}>编辑</Button>
+          <Popconfirm title="确认删除?" onConfirm={() => onDelete(record)} disabled={isBuiltinSkill(record)}>
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={isBuiltinSkill(record)}>删除</Button>
           </Popconfirm>
         </Space>
       )
@@ -473,9 +536,56 @@ const Skills: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
-        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><BulbOutlined /> 技能管理</Title>
+        <div>
+          <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><BulbOutlined /> Skill 治理工作台</Title>
+          <Text type="secondary">统一治理 Skill 来源、生命周期、输入输出 Schema、执行编排、测试历史和生产授权风险。</Text>
+        </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditModal()}>新建技能</Button>
       </div>
+
+      <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
+        <Alert
+          type="warning"
+          showIcon
+          message="内置/锁定资源保护"
+          description="created_by=system 的内置 Skill 不可编辑、停用或删除；MCP Tool 和 Connector 标记 is_builtin/locked 后也不可删除、停用或被普通编辑破坏。前端只做 UX 提示，后端 API 和助手治理工具均会强制拦截。"
+        />
+        <Row gutter={[16, 16]}>
+          <Col xs={12} md={6}><Card><Statistic title="Skill 总数" value={skills.length} prefix={<BulbOutlined />} /></Card></Col>
+          <Col xs={12} md={6}><Card><Statistic title="生产可用" value={skillStats.productionReady} valueStyle={{ color: '#52c41a' }} prefix={<SafetyOutlined />} /></Card></Col>
+          <Col xs={12} md={6}><Card><Statistic title="内置锁定" value={skillStats.builtin} valueStyle={{ color: '#722ed1' }} prefix={<LockOutlined />} /></Card></Col>
+          <Col xs={12} md={6}><Card><Statistic title="测试/草稿" value={skills.length - skillStats.published - skillStats.disabled} prefix={<ClockCircleOutlined />} /></Card></Col>
+        </Row>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={8}>
+            <Card size="small" title="生命周期">
+              <Space wrap>
+                <Tag color="green">已发布 {skillStats.published}</Tag>
+                <Tag color="gold">测试中 {skillStats.testing}</Tag>
+                <Tag>已停用 {skillStats.disabled}</Tag>
+              </Space>
+              <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>只有已发布 Skill 才建议进入角色授权和正式执行。</Paragraph>
+            </Card>
+          </Col>
+          <Col xs={24} md={8}>
+            <Card size="small" title="Schema 与触发">
+              <Space wrap>
+                <Tag color="blue">有输入 Schema {skillStats.withSchema}</Tag>
+                <Tag color="cyan">有触发条件 {skillStats.withTriggers}</Tag>
+              </Space>
+              <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>输入 Schema 决定执行前参数校验和助手追问质量。</Paragraph>
+            </Card>
+          </Col>
+          <Col xs={24} md={8}>
+            <Card size="small" title="执行编排">
+              <Space wrap>
+                <Tag color="purple" icon={<PartitionOutlined />}>包含 MCP 步骤 {skillStats.mcpSteps}</Tag>
+              </Space>
+              <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>Skill 执行仍受角色授权、MCP 工具授权和执行模式共同约束。</Paragraph>
+            </Card>
+          </Col>
+        </Row>
+      </Space>
 
       <div style={{ marginBottom: 16, padding: 12, background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 8 }}>
         <Space wrap size="middle" style={{ width: '100%' }}>
@@ -550,9 +660,62 @@ const Skills: React.FC = () => {
       <Table dataSource={filteredSkills} columns={columns} rowKey="id" loading={loading}
         size={isMobile ? 'small' : 'middle'} scroll={isMobile ? { x: 400 } : undefined} />
 
+      <Modal title="Skill 治理详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={isMobile ? '95%' : 820}>
+        {detailSkill && (() => {
+          const steps = parseSteps(detailSkill.steps);
+          const risk = skillRisk(detailSkill);
+          const inputFields = parseInputSchema(detailSkill.input_schema).fields;
+          const tags = parseJsonArray<string>(detailSkill.tags, []);
+          return (
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <Alert
+                type={isBuiltinSkill(detailSkill) ? 'warning' : risk.color === 'green' ? 'success' : 'info'}
+                showIcon
+                message={isBuiltinSkill(detailSkill) ? '内置锁定 Skill' : risk.label}
+                description={isBuiltinSkill(detailSkill) ? '该 Skill 由系统创建，前端禁用编辑/删除，后端 API 和助手治理工具也会强制拦截。' : risk.reason}
+              />
+              <Descriptions bordered size="small" column={isMobile ? 1 : 2}>
+                <Descriptions.Item label="Skill ID">{detailSkill.id}</Descriptions.Item>
+                <Descriptions.Item label="来源">{isBuiltinSkill(detailSkill) ? <Tag color="purple" icon={<LockOutlined />}>系统内置</Tag> : <Tag>租户自定义</Tag>}</Descriptions.Item>
+                <Descriptions.Item label="名称">{detailSkill.name}</Descriptions.Item>
+                <Descriptions.Item label="版本">{detailSkill.version}</Descriptions.Item>
+                <Descriptions.Item label="生命周期">{renderStatusTag(detailSkill.status)}</Descriptions.Item>
+                <Descriptions.Item label="风险/就绪"> <Tag color={risk.color}>{risk.label}</Tag></Descriptions.Item>
+                <Descriptions.Item label="分类">{detailSkill.category || '-'}</Descriptions.Item>
+                <Descriptions.Item label="标签">{tags.length ? tags.map(tag => <Tag key={tag}>{tag}</Tag>) : '-'}</Descriptions.Item>
+                <Descriptions.Item label="使用次数">{detailSkill.usage_count || 0}</Descriptions.Item>
+                <Descriptions.Item label="最近使用">{fmtTime(detailSkill.last_used_at)}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{fmtTime(detailSkill.created_at)}</Descriptions.Item>
+                <Descriptions.Item label="更新时间">{fmtTime(detailSkill.updated_at)}</Descriptions.Item>
+                <Descriptions.Item label="描述" span={isMobile ? 1 : 2}>{detailSkill.description || '-'}</Descriptions.Item>
+              </Descriptions>
+              <Card size="small" title="执行编排">
+                <Space wrap>
+                  <Tag color="blue">步骤 {steps.length}</Tag>
+                  <Tag color="purple">MCP 步骤 {steps.filter(step => step.type === 'mcp_tool').length}</Tag>
+                  <Tag color="cyan">输入字段 {inputFields.length}</Tag>
+                  <Tag color={detailSkill.triggers ? 'green' : 'default'}>{detailSkill.triggers ? '有触发条件' : '无触发条件'}</Tag>
+                </Space>
+                <Collapse size="small" style={{ marginTop: 12 }} items={[
+                  { key: 'steps', label: '步骤 JSON', children: <pre style={{ maxHeight: 220, overflow: 'auto', margin: 0 }}>{JSON.stringify(steps, null, 2)}</pre> },
+                  { key: 'input', label: '输入 Schema', children: <pre style={{ maxHeight: 180, overflow: 'auto', margin: 0 }}>{prettyJson(detailSkill.input_schema)}</pre> },
+                ]} />
+              </Card>
+            </Space>
+          );
+        })()}
+      </Modal>
+
       {/* ========== 编辑/新建技能弹窗 ========== */}
       <Modal title={editing ? '编辑技能' : '新建技能'} open={modalOpen} onOk={onOk} onCancel={() => setModalOpen(false)}
         width={isMobile ? '95%' : 700} destroyOnClose>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={editing ? '编辑租户自定义 Skill' : '创建租户自定义 Skill'}
+          description="Skill 发布后才建议进入角色授权和正式执行；执行链仍由后端按角色、MCP 工具权限、执行模式和输入 Schema 校验。系统内置 Skill 不允许进入普通编辑。"
+        />
         <Form form={form} layout="vertical" initialValues={{ version: '1.0.0', status: 'draft' }}>
           <Tabs items={[
             {

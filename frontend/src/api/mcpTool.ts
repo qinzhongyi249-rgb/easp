@@ -21,6 +21,22 @@ export interface MCPTool {
   updated_at: string;
 }
 
+export interface MCPToolAuthorizationRole {
+  id: string;
+  name: string;
+  wildcard?: boolean;
+}
+
+export interface MCPToolGovernanceStatus {
+  tool_id: string;
+  authorization_status: 'granted' | 'not_granted' | 'unavailable' | string;
+  authorized_role_count: number;
+  authorized_roles: MCPToolAuthorizationRole[];
+  current_user_can_execute: boolean;
+  current_user_granted_roles: MCPToolAuthorizationRole[];
+  block_reasons: string[];
+}
+
 export const mcpToolApi = {
   list: (tenantId: string) =>
     client.get<MCPTool[]>(`/tenants/${tenantId}/mcp-tools`),
@@ -28,6 +44,8 @@ export const mcpToolApi = {
     client.get<MCPTool[]>(`/tenants/${tenantId}/mcp-tools`, { params: { enabled: true } }),
   get: (tenantId: string, id: string) =>
     client.get<MCPTool>(`/tenants/${tenantId}/mcp-tools/${id}`),
+  governanceStatus: (tenantId: string, id: string) =>
+    client.get<MCPToolGovernanceStatus>(`/tenants/${tenantId}/mcp-tools/${id}/governance-status`),
   create: (tenantId: string, data: Partial<MCPTool>) =>
     client.post<MCPTool>(`/tenants/${tenantId}/mcp-tools`, data),
   update: (tenantId: string, id: string, data: Partial<MCPTool>) =>

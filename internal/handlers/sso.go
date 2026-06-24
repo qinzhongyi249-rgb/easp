@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,9 +25,95 @@ import (
 // SSOHandler SSO处理器
 type SSOHandler struct{}
 
+type SSOProviderField struct {
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	Component   string `json:"component"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Required    bool   `json:"required"`
+	Advanced    bool   `json:"advanced"`
+	Help        string `json:"help,omitempty"`
+}
+
+type SSOProviderTemplate struct {
+	Key         string                 `json:"key"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Badge       string                 `json:"badge"`
+	Recommended bool                   `json:"recommended"`
+	Values      map[string]interface{} `json:"values"`
+	Fields      []SSOProviderField     `json:"fields"`
+	Docs        []string               `json:"docs"`
+}
+
 // NewSSOHandler 创建SSO处理器
 func NewSSOHandler() *SSOHandler {
 	return &SSOHandler{}
+}
+
+func commonSSOFields() []SSOProviderField {
+	return []SSOProviderField{
+		{Name: "login_url", Label: "登录/授权 URL", Component: "input", Placeholder: "https://idp.example.com/oauth/authorize", Required: true, Advanced: false, Help: "身份源发起登录或授权的地址"},
+		{Name: "user_info_url", Label: "用户信息 URL", Component: "input", Placeholder: "https://idp.example.com/oauth/userinfo", Required: false, Advanced: false, Help: "用于获取登录用户 openid/sub/email/name 等信息"},
+		{Name: "login_method", Label: "登录请求方法", Component: "select", Placeholder: "POST", Required: false, Advanced: true},
+		{Name: "login_headers", Label: "登录请求头 JSON", Component: "textarea", Placeholder: `{"Content-Type":"application/json"}`, Required: false, Advanced: true},
+		{Name: "login_body_template", Label: "登录请求体模板", Component: "textarea", Placeholder: `{"username":"{{username}}","password":"{{password}}"}`, Required: false, Advanced: true},
+		{Name: "user_info_method", Label: "用户信息请求方法", Component: "select", Placeholder: "GET", Required: false, Advanced: true},
+		{Name: "user_info_headers", Label: "用户信息请求头 JSON", Component: "textarea", Placeholder: `{"Authorization":"Bearer {{token}}"}`, Required: false, Advanced: true},
+		{Name: "response_mapping", Label: "字段映射 JSON", Component: "textarea", Placeholder: `{"token":"$.access_token","user_id":"$.user.id","email":"$.user.email","display_name":"$.user.name"}`, Required: false, Advanced: true, Help: "自定义身份源字段不一致时再调整"},
+		{Name: "callback_url", Label: "回调 URL", Component: "input", Placeholder: "https://easp.example.com/sso/{tenantId}/callback", Required: false, Advanced: true},
+	}
+}
+
+func ssoProviderTemplates() []SSOProviderTemplate {
+	fields := commonSSOFields()
+	return []SSOProviderTemplate{
+		{
+			Key: "wechat_work", Name: "企业微信", Badge: "推荐", Recommended: true,
+			Description: "员工使用企业微信身份登录 EASP 控制台，适合企微组织客户。",
+			Values: map[string]interface{}{
+				"login_method": "POST", "user_info_method": "GET", "login_headers": `{"Content-Type":"application/json"}`,
+				"response_mapping": `{"token":"$.access_token","user_id":"$.user.userid","email":"$.user.email","display_name":"$.user.name"}`,
+			},
+			Fields: fields,
+			Docs:   []string{"在企业微信管理后台创建自建应用", "配置可信域名和回调地址", "复制登录/用户信息接口到 EASP", "保存后复制 /sso/:tenantId 登录链接测试"},
+		},
+		{
+			Key: "feishu", Name: "飞书", Badge: "常用", Recommended: true,
+			Description: "员工使用飞书身份登录 EASP 控制台，适合飞书组织客户。",
+			Values: map[string]interface{}{
+				"login_method": "POST", "user_info_method": "GET", "login_headers": `{"Content-Type":"application/json"}`,
+				"response_mapping": `{"token":"$.access_token","user_id":"$.data.user_id","email":"$.data.email","display_name":"$.data.name"}`,
+			},
+			Fields: fields,
+			Docs:   []string{"在飞书开放平台创建企业自建应用", "开通获取用户基本信息权限", "配置 OAuth 回调地址", "保存后用测试账号访问登录链接"},
+		},
+		{
+			Key: "dingtalk", Name: "钉钉", Badge: "常用", Recommended: false,
+			Description: "员工使用钉钉身份登录 EASP 控制台，适合钉钉组织客户。",
+			Values: map[string]interface{}{
+				"login_method": "POST", "user_info_method": "GET", "login_headers": `{"Content-Type":"application/json"}`,
+				"response_mapping": `{"token":"$.access_token","user_id":"$.result.userid","email":"$.result.email","display_name":"$.result.name"}`,
+			},
+			Fields: fields,
+			Docs:   []string{"在钉钉开放平台创建应用", "配置登录授权和回调地址", "开通用户信息权限", "保存后复制登录链接测试"},
+		},
+		{
+			Key: "oidc", Name: "自定义 OIDC/OAuth2", Badge: "高级", Recommended: false,
+			Description: "对接 Keycloak、Authing、Azure AD 或其它标准 OAuth/OIDC 身份源。",
+			Values: map[string]interface{}{
+				"login_method": "POST", "user_info_method": "GET", "login_headers": `{"Content-Type":"application/json"}`,
+				"response_mapping": `{"token":"$.access_token","user_id":"$.sub","email":"$.email","display_name":"$.name"}`,
+			},
+			Fields: fields,
+			Docs:   []string{"准备 authorize/token/userinfo 地址", "确认 redirect_uri 与身份源后台一致", "配置字段映射 sub/email/name", "保存并测试登录"},
+		},
+	}
+}
+
+// GetProviderTemplates 获取身份源模板，前端只负责渲染，不硬编码模板字段。
+func (h *SSOHandler) GetProviderTemplates(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"templates": ssoProviderTemplates()})
 }
 
 // GetConfig 获取租户SSO配置
@@ -51,19 +139,21 @@ func (h *SSOHandler) SaveConfig(c *gin.Context) {
 	tenantID := c.Param("tenantId")
 
 	var req struct {
-		Enabled           bool   `json:"enabled"`
-		LoginURL          string `json:"login_url" binding:"required"`
-		LoginMethod       string `json:"login_method"`
-		LoginHeaders      string `json:"login_headers"`
-		LoginBodyTemplate string `json:"login_body_template"`
-		UserInfoURL       string `json:"user_info_url"`
-		UserInfoMethod    string `json:"user_info_method"`
-		UserInfoHeaders   string `json:"user_info_headers"`
-		ResponseMapping   string `json:"response_mapping"`
-		CallbackURL       string `json:"callback_url"`
-		SyncUserOnLogin   bool   `json:"sync_user_on_login"`
-		SyncURL           string `json:"sync_url"`
-		SyncMethod        string `json:"sync_method"`
+		Enabled           bool     `json:"enabled"`
+		LoginURL          string   `json:"login_url" binding:"required"`
+		LoginMethod       string   `json:"login_method"`
+		LoginHeaders      string   `json:"login_headers"`
+		LoginBodyTemplate string   `json:"login_body_template"`
+		UserInfoURL       string   `json:"user_info_url"`
+		UserInfoMethod    string   `json:"user_info_method"`
+		UserInfoHeaders   string   `json:"user_info_headers"`
+		ResponseMapping   string   `json:"response_mapping"`
+		CallbackURL       string   `json:"callback_url"`
+		SyncUserOnLogin   bool     `json:"sync_user_on_login"`
+		SyncURL           string   `json:"sync_url"`
+		SyncMethod        string   `json:"sync_method"`
+		AutoCreateUser    bool     `json:"auto_create_user"`
+		DefaultRoleIDs    []string `json:"default_role_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -102,13 +192,14 @@ func (h *SSOHandler) SaveConfig(c *gin.Context) {
 		_, err = database.DB.Exec(`INSERT INTO tenant_sso_configs 
 			(id, tenant_id, enabled, login_url, login_method, login_headers, login_body_template, 
 			 user_info_url, user_info_method, user_info_headers, response_mapping, callback_url,
-			 sync_user_on_login, sync_url, sync_method, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+			 sync_user_on_login, sync_url, sync_method, auto_create_user, default_role_ids, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
 			configID, tenantID, req.Enabled, req.LoginURL, req.LoginMethod,
 			nilIfEmpty(req.LoginHeaders), nilIfEmpty(req.LoginBodyTemplate),
 			nilIfEmpty(req.UserInfoURL), req.UserInfoMethod, nilIfEmpty(req.UserInfoHeaders),
 			nilIfEmpty(req.ResponseMapping), nilIfEmpty(req.CallbackURL),
-			req.SyncUserOnLogin, nilIfEmpty(req.SyncURL), req.SyncMethod)
+			req.SyncUserOnLogin, nilIfEmpty(req.SyncURL), req.SyncMethod,
+			req.AutoCreateUser, mustEncodeRoleIDs(req.DefaultRoleIDs))
 		if err != nil {
 			log.Printf("Failed to create SSO config: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create SSO config", "details": err.Error()})
@@ -119,13 +210,15 @@ func (h *SSOHandler) SaveConfig(c *gin.Context) {
 		_, err = database.DB.Exec(`UPDATE tenant_sso_configs SET 
 			enabled = ?, login_url = ?, login_method = ?, login_headers = ?, login_body_template = ?,
 			user_info_url = ?, user_info_method = ?, user_info_headers = ?, response_mapping = ?,
-			callback_url = ?, sync_user_on_login = ?, sync_url = ?, sync_method = ?, updated_at = NOW()
+			callback_url = ?, sync_user_on_login = ?, sync_url = ?, sync_method = ?,
+			auto_create_user = ?, default_role_ids = ?, updated_at = NOW()
 			WHERE tenant_id = ?`,
 			req.Enabled, req.LoginURL, req.LoginMethod,
 			nilIfEmpty(req.LoginHeaders), nilIfEmpty(req.LoginBodyTemplate),
 			nilIfEmpty(req.UserInfoURL), req.UserInfoMethod, nilIfEmpty(req.UserInfoHeaders),
 			nilIfEmpty(req.ResponseMapping), nilIfEmpty(req.CallbackURL),
-			req.SyncUserOnLogin, nilIfEmpty(req.SyncURL), req.SyncMethod, tenantID)
+			req.SyncUserOnLogin, nilIfEmpty(req.SyncURL), req.SyncMethod,
+			req.AutoCreateUser, mustEncodeRoleIDs(req.DefaultRoleIDs), tenantID)
 		if err != nil {
 			log.Printf("Failed to update SSO config: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update SSO config"})
@@ -185,8 +278,15 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 			return
 		}
 
-		user, err := createOrUpdateUser(tenantID, userInfo)
+		user, err := createOrUpdateUser(tenantID, userInfo, config)
 		if err != nil {
+			if errors.Is(err, ErrSSOUserNotProvisioned) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":   "USER_NOT_PROVISIONED",
+					"message": "用户未在 EASP 中开通，请联系管理员",
+				})
+				return
+			}
 			log.Printf("Failed to create/update user: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 			return
@@ -232,6 +332,7 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"user": gin.H{
 				"id":           user.ID,
+				"account":      user.Account,
 				"tenant_id":    user.TenantID,
 				"email":        user.Email,
 				"display_name": user.DisplayName,
@@ -307,6 +408,7 @@ func (h *SSOHandler) TenantLogin(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"user": gin.H{
 				"id":           user.ID,
+				"account":      user.Account,
 				"tenant_id":    user.TenantID,
 				"email":        user.Email,
 				"display_name": user.DisplayName,
@@ -501,8 +603,45 @@ func extractValue(data map[string]interface{}, path string) string {
 	return ""
 }
 
+// ErrSSOUserNotProvisioned indicates SSO login succeeded but EASP user provisioning is disabled.
+var ErrSSOUserNotProvisioned = errors.New("sso user is not provisioned in EASP")
+
+type ssoProvisionedUser struct {
+	ID string
+}
+
+func resolveSSOProvisionedUser(existing *ssoProvisionedUser, autoCreate bool, create func() (*ssoProvisionedUser, error)) (*ssoProvisionedUser, error) {
+	if existing != nil {
+		return existing, nil
+	}
+	if !autoCreate {
+		return nil, ErrSSOUserNotProvisioned
+	}
+	return create()
+}
+
+func mustEncodeRoleIDs(roleIDs []string) *string {
+	if len(roleIDs) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(roleIDs)
+	s := string(b)
+	return &s
+}
+
+func decodeRoleIDs(raw *string) []string {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil
+	}
+	var roleIDs []string
+	if err := json.Unmarshal([]byte(*raw), &roleIDs); err != nil {
+		return nil
+	}
+	return roleIDs
+}
+
 // createOrUpdateUser 创建或更新用户
-func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.User, error) {
+func createOrUpdateUser(tenantID string, userInfo map[string]string, config models.TenantSSOConfig) (*models.User, error) {
 	userRepo := repositories.NewUserRepository()
 
 	email := userInfo["email"]
@@ -510,9 +649,11 @@ func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.Us
 		email = fmt.Sprintf("%s@sso.local", userInfo["user_id"])
 	}
 
-	// 尝试查找当前租户现有用户
-	user, _ := userRepo.GetByTenantAndEmail(tenantID, email)
-	if user != nil {
+	account := strings.ToLower(strings.TrimSpace(firstNonEmptyString(userInfo["account"], userInfo["user_id"], email)))
+
+	// 尝试按当前租户登录账号查找现有用户；邮箱只是属性，不作为唯一身份
+	user, err := userRepo.GetByTenantAndAccount(tenantID, account)
+	if err == nil && user != nil {
 		// 更新用户信息
 		if userInfo["display_name"] != "" {
 			user.DisplayName = userInfo["display_name"]
@@ -524,11 +665,21 @@ func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.Us
 		userRepo.Update(user)
 		return user, nil
 	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	if _, err := resolveSSOProvisionedUser(nil, config.AutoCreateUser, func() (*ssoProvisionedUser, error) {
+		return &ssoProvisionedUser{}, nil
+	}); err != nil {
+		return nil, err
+	}
 
 	// 创建新用户
 	user = &models.User{
 		ID:          uuid.New().String(),
 		TenantID:    tenantID,
+		Account:     account,
 		Email:       email,
 		DisplayName: userInfo["display_name"],
 		Status:      "active",
@@ -542,11 +693,28 @@ func createOrUpdateUser(tenantID string, userInfo map[string]string) (*models.Us
 		return nil, err
 	}
 
-	// 分配默认角色
-	roleRepo := repositories.NewRoleRepository()
-	defaultRole, _ := roleRepo.GetByName(tenantID, "普通用户")
-	if defaultRole != nil {
-		repositories.NewUserRoleRepository().Assign(user.ID, defaultRole.ID)
+	// 分配默认角色：优先使用SSO配置中的角色ID；未配置时回退到“普通用户”。
+	roleIDs := decodeRoleIDs(config.DefaultRoleIDs)
+	if len(roleIDs) > 0 {
+		roleRepo := repositories.NewRoleRepository()
+		userRoleRepo := repositories.NewUserRoleRepository()
+		for _, roleID := range roleIDs {
+			roleID = strings.TrimSpace(roleID)
+			if roleID == "" {
+				continue
+			}
+			role, err := roleRepo.GetByID(roleID)
+			if err != nil || role == nil || role.IsSystem || role.TenantID != tenantID {
+				continue
+			}
+			_ = userRoleRepo.Assign(user.ID, role.ID)
+		}
+	} else {
+		roleRepo := repositories.NewRoleRepository()
+		defaultRole, _ := roleRepo.GetByName(tenantID, "普通用户")
+		if defaultRole != nil {
+			repositories.NewUserRoleRepository().Assign(user.ID, defaultRole.ID)
+		}
 	}
 
 	return user, nil

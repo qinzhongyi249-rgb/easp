@@ -89,31 +89,38 @@ type TenantSSOConfig struct {
 	SyncURL           *string   `db:"sync_url" json:"sync_url,omitempty"`
 	SyncMethod        string    `db:"sync_method" json:"sync_method"`
 	SyncHeaders       *string   `db:"sync_headers" json:"sync_headers,omitempty"`
+	AutoCreateUser    bool      `db:"auto_create_user" json:"auto_create_user"`
+	DefaultRoleIDs    *string   `db:"default_role_ids" json:"default_role_ids,omitempty"`
 	CreatedAt         time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt         time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // User 用户模型
 type User struct {
-	ID           string     `db:"id" json:"id"`
-	TenantID     string     `db:"tenant_id" json:"tenant_id"`
-	Email          string  `db:"email" json:"email"`
-	EmailUniqueKey *string `db:"email_unique_key" json:"-"`
-	DisplayName    string  `db:"display_name" json:"display_name"`
-	Avatar         string  `db:"avatar" json:"avatar"`
-	Phone          string  `db:"phone" json:"phone"`
-	PhoneUniqueKey *string `db:"phone_unique_key" json:"-"`
-	Status         string  `db:"status" json:"status"`
-	PasswordHash string     `db:"password_hash" json:"-"`
-	SSOProvider  string     `db:"sso_provider" json:"sso_provider"`
-	SSOUserID    string     `db:"sso_user_id" json:"sso_user_id"`
-	SSOLinkedAt  *time.Time `db:"sso_linked_at" json:"sso_linked_at"`
-	Metadata     *string    `db:"metadata" json:"metadata,omitempty"`
-	LastLoginAt  *time.Time `db:"last_login_at" json:"last_login_at"`
-	LoginCount   int        `db:"login_count" json:"login_count"`
-	DeletedAt    *time.Time `db:"deleted_at" json:"deleted_at,omitempty"`
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
+	ID               string     `db:"id" json:"id"`
+	UserUID          string     `db:"user_uid" json:"user_uid"` // 用户全局唯一标识，稳定对外展示
+	Account          string     `db:"account" json:"account"`   // 登录账号：租户内唯一，不随邮箱/手机号变更
+	AccountUniqueKey *string    `db:"account_unique_key" json:"-"`
+	TenantID         string     `db:"tenant_id" json:"tenant_id"`
+	Email            string     `db:"email" json:"email"`
+	EmailUniqueKey   *string    `db:"email_unique_key" json:"-"`
+	DisplayName      string     `db:"display_name" json:"display_name"`
+	Avatar           string     `db:"avatar" json:"avatar"`
+	Phone            string     `db:"phone" json:"phone"`
+	PhoneUniqueKey   *string    `db:"phone_unique_key" json:"-"`
+	Status           string     `db:"status" json:"status"`
+	PasswordHash     string     `db:"password_hash" json:"-"`
+	SSOProvider      string     `db:"sso_provider" json:"sso_provider"`
+	SSOUserID        string     `db:"sso_user_id" json:"sso_user_id"`
+	SSOLinkedAt      *time.Time `db:"sso_linked_at" json:"sso_linked_at"`
+	Metadata         *string    `db:"metadata" json:"metadata,omitempty"`
+	Profile          *string    `db:"profile" json:"profile,omitempty"`       // JSON: 业务属性、组织、岗位、标签等
+	Attributes       *string    `db:"attributes" json:"attributes,omitempty"` // JSON: 可查询的扩展属性
+	LastLoginAt      *time.Time `db:"last_login_at" json:"last_login_at"`
+	LoginCount       int        `db:"login_count" json:"login_count"`
+	DeletedAt        *time.Time `db:"deleted_at" json:"deleted_at,omitempty"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 // Role 角色模型
@@ -159,6 +166,8 @@ type Connector struct {
 	SpecContent          *string    `db:"spec_content" json:"spec_content,omitempty"`
 	Status               string     `db:"status" json:"status"`
 	ToolsCount           int        `db:"tools_count" json:"tools_count"`
+	IsBuiltin            bool       `db:"is_builtin" json:"is_builtin"`
+	Locked               bool       `db:"locked" json:"locked"`
 	LastSyncAt           *time.Time `db:"last_sync_at" json:"last_sync_at,omitempty"`
 	CreatedAt            time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt            time.Time  `db:"updated_at" json:"updated_at"`
@@ -238,20 +247,25 @@ type Skill struct {
 
 // AuditLog 审计日志模型
 type AuditLog struct {
-	ID         string    `db:"id" json:"id"`
-	TenantID   string    `db:"tenant_id" json:"tenant_id"`
-	UserID     *string   `db:"user_id" json:"user_id,omitempty"`
-	AgentID    *string   `db:"agent_id" json:"agent_id,omitempty"`
-	Tool       string    `db:"tool" json:"tool"`
-	Action     string    `db:"action" json:"action"`
-	Resource   *string   `db:"resource" json:"resource,omitempty"`
-	Detail     *string   `db:"detail" json:"detail,omitempty"`
-	Decision   *string   `db:"decision" json:"decision,omitempty"`
-	Result     *string   `db:"result" json:"result,omitempty"`
-	DurationMs *int      `db:"duration_ms" json:"duration_ms,omitempty"`
-	IP         *string   `db:"ip" json:"ip,omitempty"`
-	UserAgent  *string   `db:"user_agent" json:"user_agent,omitempty"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	ID             string    `db:"id" json:"id"`
+	TenantID       string    `db:"tenant_id" json:"tenant_id"`
+	UserID         *string   `db:"user_id" json:"user_id,omitempty"`
+	UserUID        *string   `db:"user_uid" json:"user_uid,omitempty"`
+	AgentID        *string   `db:"agent_id" json:"agent_id,omitempty"`
+	SourceType     *string   `db:"source_type" json:"source_type,omitempty"` // admin/embed/api_key/sso
+	SourceAppID    *string   `db:"source_app_id" json:"source_app_id,omitempty"`
+	ExternalSystem *string   `db:"external_system" json:"external_system,omitempty"`
+	ExternalUserID *string   `db:"external_user_id" json:"external_user_id,omitempty"`
+	Tool           string    `db:"tool" json:"tool"`
+	Action         string    `db:"action" json:"action"`
+	Resource       *string   `db:"resource" json:"resource,omitempty"`
+	Detail         *string   `db:"detail" json:"detail,omitempty"`
+	Decision       *string   `db:"decision" json:"decision,omitempty"`
+	Result         *string   `db:"result" json:"result,omitempty"`
+	DurationMs     *int      `db:"duration_ms" json:"duration_ms,omitempty"`
+	IP             *string   `db:"ip" json:"ip,omitempty"`
+	UserAgent      *string   `db:"user_agent" json:"user_agent,omitempty"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
 }
 
 // CircuitBreakerState 熔断器状态模型
@@ -291,6 +305,65 @@ type SSOProvider struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
+// TenantEmbedApp 嵌入式接入应用配置
+// app_secret_hash 存储 HMAC 密钥材料的 SHA256 摘要，不返回前端；业务系统只在创建/重置时拿到原始 app_secret。
+type TenantEmbedApp struct {
+	ID              string     `db:"id" json:"id"`
+	TenantID        string     `db:"tenant_id" json:"tenant_id"`
+	AppID           string     `db:"app_id" json:"app_id"`
+	AppSecretHash   string     `db:"app_secret_hash" json:"-"`
+	Name            string     `db:"name" json:"name"`
+	ExternalSystem  string     `db:"external_system" json:"external_system"`
+	AllowedOrigins  *string    `db:"allowed_origins" json:"allowed_origins,omitempty"`
+	AllowedScopes   *string    `db:"allowed_scopes" json:"allowed_scopes,omitempty"`
+	TokenTTLSeconds int        `db:"token_ttl_seconds" json:"token_ttl_seconds"`
+	AutoCreateUser  bool       `db:"auto_create_user" json:"auto_create_user"`
+	DefaultRoleIDs  *string    `db:"default_role_ids" json:"default_role_ids,omitempty"`
+	Status          string     `db:"status" json:"status"`
+	LastUsedAt      *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
+	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// ExternalUserBinding 外部业务用户与 EASP 用户绑定关系
+type ExternalUserBinding struct {
+	ID             string     `db:"id" json:"id"`
+	TenantID       string     `db:"tenant_id" json:"tenant_id"`
+	UserID         string     `db:"user_id" json:"user_id"`
+	ExternalSystem string     `db:"external_system" json:"external_system"`
+	ExternalUserID string     `db:"external_user_id" json:"external_user_id"`
+	DisplayName    string     `db:"display_name" json:"display_name"`
+	Email          string     `db:"email" json:"email"`
+	Phone          string     `db:"phone" json:"phone"`
+	Metadata       *string    `db:"metadata" json:"metadata,omitempty"`
+	Status         string     `db:"status" json:"status"`
+	LastLoginAt    *time.Time `db:"last_login_at" json:"last_login_at,omitempty"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// UserIdentityBinding 第三方登录/外部身份与 EASP 用户关联。先维护数据结构，暂不实现 OAuth 对接。
+type UserIdentityBinding struct {
+	ID             string     `db:"id" json:"id"`
+	TenantID       string     `db:"tenant_id" json:"tenant_id"`
+	UserID         string     `db:"user_id" json:"user_id"`
+	Provider       string     `db:"provider" json:"provider"` // wechat/feishu/dingtalk/sso/external
+	ProviderUserID string     `db:"provider_user_id" json:"provider_user_id"`
+	UnionID        string     `db:"union_id" json:"union_id"`
+	OpenID         string     `db:"open_id" json:"open_id"`
+	ExternalSystem string     `db:"external_system" json:"external_system"`
+	DisplayName    string     `db:"display_name" json:"display_name"`
+	Avatar         string     `db:"avatar" json:"avatar"`
+	Email          string     `db:"email" json:"email"`
+	Phone          string     `db:"phone" json:"phone"`
+	Metadata       *string    `db:"metadata" json:"metadata,omitempty"`
+	Status         string     `db:"status" json:"status"`
+	LinkedAt       time.Time  `db:"linked_at" json:"linked_at"`
+	LastLoginAt    *time.Time `db:"last_login_at" json:"last_login_at,omitempty"`
+	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at" json:"updated_at"`
+}
+
 // APIKey API密钥（绑定到用户）
 type APIKey struct {
 	ID         string     `db:"id" json:"id"`
@@ -306,6 +379,18 @@ type APIKey struct {
 	UsageCount int64      `db:"usage_count" json:"usage_count"`
 	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time  `db:"updated_at" json:"updated_at"`
+}
+
+// AssistantConversation AI 助手会话
+type AssistantConversation struct {
+	ID           string    `db:"id" json:"id"`
+	TenantID     string    `db:"tenant_id" json:"tenant_id"`
+	UserID       string    `db:"user_id" json:"user_id"`
+	Title        string    `db:"title" json:"title"`
+	PageContext  *string   `db:"page_context" json:"page_context,omitempty"`
+	MessageCount int       `db:"message_count" json:"message_count"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // EmbedSession Embed API 会话

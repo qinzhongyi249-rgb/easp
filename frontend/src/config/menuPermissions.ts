@@ -15,9 +15,9 @@ export const FEATURE_MENU_PERMISSIONS: FeatureMenuPermission[] = [
   { label: '技能管理', value: 'skills', path: '/skills', desc: '创建和执行技能' },
   { label: '记忆管理', value: 'memory', path: '/memory', desc: '管理记忆池、长期记忆和向量记忆' },
   { label: '模型配置', value: 'model-config', path: '/model-config', desc: '配置AI模型和提供商' },
-  { label: 'SSO配置', value: 'sso-config', path: '/sso-config', desc: '配置单点登录' },
+  { label: '身份源配置', value: 'sso-config', path: '/sso-config', desc: '员工登录 EASP 控制台的 SSO/OIDC 配置' },
   { label: 'AI 助手', value: 'assistant', path: '/assistant', desc: '使用平台内置AI助手' },
   { label: '用量分析', value: 'usage-analytics', path: '/usage-analytics', desc: '查看租户调用量、Token消耗和配额使用情况' },
   { label: '审计日志', value: 'audit-logs', path: '/audit-logs', desc: '查看操作审计日志' },
-  { label: 'API Key', value: 'api-keys', path: '/api-keys', desc: '管理嵌入式聊天/API访问密钥' },
+  { label: '系统API Key', value: 'api-keys', path: '/api-keys', desc: '管理平台 API 访问密钥；业务系统嵌入助手请优先使用用户管理中的应用接入' },
 ];

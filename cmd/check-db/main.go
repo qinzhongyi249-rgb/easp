@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/easp-platform/easp/internal/database"
 	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
-	dsn := "easp_dev:Easp_dev123@tcp(rm-8vbh4iqcp8534vs5p6o.mysql.zhangbei.rds.aliyuncs.com:3306)/easp_dev?charset=utf8mb4&parseTime=True&loc=Local"
+	dsn, err := database.DSNFromEnv()
+	if err != nil {
+		log.Fatalf("Invalid database configuration: %v", err)
+	}
 	
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {

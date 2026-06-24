@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Dropdown, Tag, Card, Alert } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, MoreOutlined, StarFilled, SafetyOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, InputNumber, Space, Typography, Popconfirm, App, Switch, Dropdown, Tag, Card, Alert, Row, Col, Statistic, Steps } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, MoreOutlined, StarFilled, SafetyOutlined, CheckCircleOutlined, StopOutlined, ApiOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { ModelProvider, ModelConfig, ValidateModelResponse } from '../api/modelConfig';
 import { modelConfigApi } from '../api/modelConfig';
@@ -24,6 +24,8 @@ const ModelConfigPage: React.FC = () => {
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidateModelResponse | null>(null);
   const isMobile = window.innerWidth < 768;
+  // 供应商列表操作按钮较多，平板/窄屏也统一收纳到更多菜单，避免操作列超出可视区域。
+  const useCompactActions = window.innerWidth < 1200;
 
   // 测试模型连接（用于模型配置）
   const testConfigConnection = async () => {
@@ -141,11 +143,25 @@ const ModelConfigPage: React.FC = () => {
     catch { message.error('操作失败'); }
   };
 
+  const defaultConfig = allConfigs.find(c => c.is_default);
+  const defaultProvider = defaultConfig ? providers.find(p => p.id === defaultConfig.provider_id) : undefined;
+  const enabledProviders = providers.filter(p => p.enabled !== false);
+  const enabledModels = allConfigs.filter(c => c.enabled !== false);
+  const disabledModels = allConfigs.filter(c => c.enabled === false);
+  const fallbackCandidates = enabledModels.filter(c => !c.is_default).length;
+
+  const getProviderModelCount = (providerId: string) => allConfigs.filter(c => c.provider_id === providerId).length;
+  const getProviderEnabledModelCount = (providerId: string) => allConfigs.filter(c => c.provider_id === providerId && c.enabled !== false).length;
+
   // ---- 供应商列定义 ----
   const providerColumns = [
     { title: '供应商', dataIndex: 'name', key: 'name', render: (name: string, record: ModelProvider) => (
       <div>
         <Text strong>{record.display_name || name}</Text>
+        <Space size={4} style={{ marginLeft: 8 }}>
+          {record.enabled !== false ? <Tag color="green">供应商启用</Tag> : <Tag color="red">供应商停用</Tag>}
+          <Tag color={getProviderEnabledModelCount(record.id) > 0 ? 'blue' : 'orange'}>{getProviderEnabledModelCount(record.id)}/{getProviderModelCount(record.id)} 模型可用</Tag>
+        </Space>
         {isMobile && <div><Text type="secondary" style={{ fontSize: 12 }}>{record.type} · {record.base_url}</Text></div>}
       </div>
     )},
@@ -156,17 +172,17 @@ const ModelConfigPage: React.FC = () => {
     { title: '状态', key: 'status', width: 70, render: (_: unknown, record: ModelProvider) => (
       <Switch size="small" checked={record.enabled} onChange={(checked) => onToggleProvider(record.id, checked)} />
     )},
-    { title: '操作', key: 'action', width: isMobile ? 50 : 150, render: (_: unknown, record: ModelProvider) => (
-      isMobile ? (
+    { title: '操作', key: 'action', width: useCompactActions ? 56 : 220, fixed: useCompactActions ? 'right' as const : undefined, render: (_: unknown, record: ModelProvider) => (
+      useCompactActions ? (
         <Dropdown menu={{ items: [
           { key: 'addModel', label: '添加模型', icon: <PlusOutlined />, onClick: () => { setCurrentProviderId(record.id); setEditingConfig(null); configForm.resetFields(); setConfigModalOpen(true); } },
           { key: 'edit', label: '编辑供应商', icon: <EditOutlined />, onClick: () => { setEditingProvider(record); providerForm.setFieldsValue(record); setProviderModalOpen(true); } },
           { key: 'delete', label: '删除', icon: <DeleteOutlined />, danger: true, onClick: () => onDeleteProvider(record.id) },
-        ]}} trigger={['click']}>
+        ]}} trigger={['click']} placement="bottomRight">
           <Button type="text" icon={<MoreOutlined />} />
         </Dropdown>
       ) : (
-        <Space>
+        <Space size="small" wrap style={{ maxWidth: 220, justifyContent: 'flex-end' }}>
           <Button size="small" icon={<PlusOutlined />} onClick={() => { setCurrentProviderId(record.id); setEditingConfig(null); configForm.resetFields(); setConfigModalOpen(true); }}>添加模型</Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => { setEditingProvider(record); providerForm.setFieldsValue(record); setProviderModalOpen(true); }}>编辑</Button>
           <Popconfirm title="删除供应商将同时删除其下所有模型，确认?" onConfirm={() => onDeleteProvider(record.id)}>
@@ -224,9 +240,45 @@ const ModelConfigPage: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', marginBottom: 16, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 12 : 0 }}>
-        <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><SettingOutlined /> 模型配置</Title>
+        <div>
+          <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}><SettingOutlined /> 模型路由与健康</Title>
+          <Text type="secondary">统一管理供应商、默认模型、备用模型、连接验证和调用风险。AI 助手只应使用启用且验证可用的模型。</Text>
+        </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingProvider(null); providerForm.resetFields(); setProviderModalOpen(true); }}>新建供应商</Button>
       </div>
+
+      <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
+        <Alert
+          type={defaultConfig && defaultProvider?.enabled !== false && defaultConfig.enabled !== false ? 'success' : 'warning'}
+          showIcon
+          message={defaultConfig ? `当前默认模型：${defaultProvider?.display_name || defaultProvider?.name || '-'} / ${defaultConfig.display_name || defaultConfig.model_name}` : '尚未设置默认模型'}
+          description="建议先测试连接再设为默认。默认模型异常时，应保留至少一个启用的备用模型用于 fallback；不要静默 fallback 到错误配置。"
+        />
+        <Steps
+          size="small"
+          current={defaultConfig ? 3 : Math.min(2, enabledModels.length)}
+          items={[
+            { title: '配置供应商', description: 'Base URL / API Key' },
+            { title: '添加模型', description: '名称、温度、Token 上限' },
+            { title: '测试连接', description: '识别 API/流式/工具/Token' },
+            { title: '设为默认', description: 'AI 助手生产调用入口' },
+          ]}
+        />
+        <Row gutter={[16, 16]}>
+          <Col xs={12} lg={6}><Card><Statistic title="供应商" value={providers.length} prefix={<ApiOutlined />} /></Card></Col>
+          <Col xs={12} lg={6}><Card><Statistic title="启用供应商" value={enabledProviders.length} prefix={<CheckCircleOutlined />} /></Card></Col>
+          <Col xs={12} lg={6}><Card><Statistic title="启用模型" value={enabledModels.length} prefix={<RobotOutlined />} /></Card></Col>
+          <Col xs={12} lg={6}><Card><Statistic title="备用模型" value={fallbackCandidates} prefix={<ThunderboltOutlined />} /></Card></Col>
+        </Row>
+        <Card size="small" title="模型路由摘要" extra={<Text type="secondary">基于当前配置</Text>}>
+          <Space wrap>
+            <Tag color={defaultConfig ? 'gold' : 'orange'} icon={defaultConfig ? <StarFilled /> : undefined}>默认：{defaultConfig ? `${defaultProvider?.display_name || defaultProvider?.name || '-'} / ${defaultConfig.model_name}` : '未设置'}</Tag>
+            <Tag color={fallbackCandidates > 0 ? 'green' : 'orange'}>Fallback候选：{fallbackCandidates}</Tag>
+            <Tag color={disabledModels.length ? 'red' : 'green'} icon={disabledModels.length ? <StopOutlined /> : <CheckCircleOutlined />}>停用模型：{disabledModels.length}</Tag>
+          </Space>
+        </Card>
+      </Space>
+
       <Table
         dataSource={providers}
         columns={providerColumns}
@@ -242,7 +294,7 @@ const ModelConfigPage: React.FC = () => {
 
 {/* 供应商弹窗 */}
       <Modal
-        title={editingProvider ? '编辑供应商' : '新建供应商'}
+        title={editingProvider ? '编辑模型供应商' : '新建模型供应商'}
         open={providerModalOpen}
         onOk={onProviderOk}
         onCancel={() => setProviderModalOpen(false)}
@@ -252,6 +304,13 @@ const ModelConfigPage: React.FC = () => {
           <Button key="submit" type="primary" onClick={onProviderOk}>确定</Button>,
         ]}
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="供应商只保存连接信息，具体模型在供应商下单独配置。"
+          description="API Key 属于敏感信息；保存后页面不应依赖前端明文做业务决策，模型调用由后端统一路由。"
+        />
         <Form form={providerForm} layout="vertical" size={isMobile ? 'middle' : 'large'}>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="如 openai, xiaomi" /></Form.Item>
           <Form.Item name="display_name" label="显示名称"><Input placeholder="如 小米，OpenAI" /></Form.Item>
@@ -264,7 +323,7 @@ const ModelConfigPage: React.FC = () => {
 
 {/* 模型配置弹窗 */}
       <Modal
-        title={editingConfig ? '编辑模型' : '添加模型'}
+        title={editingConfig ? '编辑模型路由' : '添加模型路由'}
         open={configModalOpen}
         onOk={onConfigOk}
         onCancel={() => setConfigModalOpen(false)}
@@ -277,6 +336,13 @@ const ModelConfigPage: React.FC = () => {
           <Button key="submit" type="primary" onClick={onConfigOk}>确定</Button>,
         ]}
       >
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="建议先测试连接，再保存或设为默认。"
+          description="测试会识别 API 类型、响应格式、流式支持、工具调用支持和 Token 字段类型。默认模型失败时应明确报错或走后端受控 fallback，禁止静默走错模型。"
+        />
         <Form form={configForm} layout="vertical" size={isMobile ? 'middle' : 'large'}
           initialValues={{ temperature: 0.7, max_tokens: 4096, is_default: false, enabled: true }}
         >
