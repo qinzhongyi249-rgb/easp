@@ -3263,16 +3263,36 @@ var tools []ToolDefinition
 						"result":     result,
 						"elapsed_ms": toolElapsed,
 					})
-					if reply, ok := requiresInputReplyFromToolResult(result, lastUserMsg); ok {
-						sendAssistantBufferedDelta(c, activity, reply)
-						saveConversationMessage(tid, uid, conversationID, "assistant", reply)
-						sendSSEActive(c, activity, SSEEventDone, map[string]any{
-							"total_ms":        time.Since(requestStart).Milliseconds(),
-							"conversation_id": conversationID,
-							"requires_input":  true,
-						})
-						return
-					}
+				if reply, ok := requiresInputReplyFromToolResult(result, lastUserMsg); ok {
+					sendAssistantBufferedDelta(c, activity, reply);
+					saveConversationMessage(tid, uid, conversationID, "assistant", reply);
+					sendSSEActive(c, activity, SSEEventDone, map[string]any{
+						"total_ms":        time.Since(requestStart).Milliseconds(),
+						"conversation_id": conversationID,
+						"requires_input":  true,
+					});
+					return
+				}
+				if msg, ok := permissionDeniedReplyFromToolResult(result); ok {
+					sendAssistantBufferedDelta(c, activity, msg);
+					saveConversationMessage(tid, uid, conversationID, "assistant", msg);
+					sendSSEActive(c, activity, SSEEventDone, map[string]any{
+						"total_ms":        time.Since(requestStart).Milliseconds(),
+						"conversation_id": conversationID,
+					});
+					return
+				}
+				// 工具执行失败，提示用户
+				if status == "failed" && resultErr != nil {
+					errMsg := fmt.Sprintf("工具调用失败：%s\n\n请检查参数是否正确，或联系该工具的开发者协助排查。", resultErr.Error());
+					sendAssistantBufferedDelta(c, activity, errMsg);
+					saveConversationMessage(tid, uid, conversationID, "assistant", errMsg);
+					sendSSEActive(c, activity, SSEEventDone, map[string]any{
+						"total_ms":        time.Since(requestStart).Milliseconds(),
+						"conversation_id": conversationID,
+					});
+					return
+				}
 
 					messages = append(messages, modelservice.Message{
 						Role:       "tool",
