@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/easp-platform/easp/internal/database"
@@ -159,6 +161,7 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 	// 解析参数与执行模式。空 execution_mode 归一为 sandbox，避免测试调用默认打生产。
 	var arguments json.RawMessage
 	executionMode := skillPkg.ExecutionModeSandbox
+	var userToken *string
 	if c.Request.Body != nil {
 		body, _ := c.GetRawData()
 		if len(body) > 0 {
@@ -166,6 +169,7 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 			var req struct {
 				Arguments     json.RawMessage `json:"arguments"`
 				ExecutionMode string          `json:"execution_mode"`
+				UserToken     *string         `json:"user_token"`
 			}
 			if err := json.Unmarshal(body, &req); err == nil {
 				executionMode = skillPkg.NormalizeExecutionMode(req.ExecutionMode)
@@ -174,6 +178,7 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 				} else {
 					arguments = body
 				}
+				userToken = req.UserToken
 			} else {
 				arguments = body
 			}
@@ -210,7 +215,14 @@ func (h *MCPHandler) CallTool(c *gin.Context) {
 	}
 
 	// 调用工具
-	ctx := contextWithUserSSOToken(c.Request.Context(), tenantID, uid)
+	var ctx context.Context
+	if userToken != nil && *userToken != "" {
+		// 如果前端手动传入了 user_token，直接使用它覆盖上下文获取的 token
+		ctx = mcp.WithManualUserToken(c.Request.Context(), *userToken)
+	} else {
+		// 正常流程：从上下文用户 SSO token 存储中获取
+		ctx = contextWithUserSSOToken(c.Request.Context(), tenantID, uid)
+	}
 	resp, err := h.proxy.CallTool(ctx, mcp.ToolCallRequest{
 		Tool:      tool,
 		Connector: connector,
@@ -391,7 +403,8 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 	}
 
 	// 单接口 RESTful API 导入：复用已有连接器，直接生成 MCP 工具。
-	if req.ConnectorID != "" || req.APIPath != "" || req.Method != "" {
+	// 只有当 connector_id + api_path + method 都填写了，才走单接口导入
+	if req.ConnectorID != "" && req.APIPath != "" && req.Method != "" {
 		restReq, err := normalizeRESTImportRequest(req)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -414,6 +427,7 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 	}
 
 	// OpenAPI 文档导入：支持 spec_content 或 spec_url。
+	// 如果传入 connector_id，复用已有连接器；否则新建连接器。
 	var spec *openapi.OpenAPISpec
 	var err error
 	if req.SpecContent != "" {
@@ -429,20 +443,38 @@ func (h *MCPHandler) ImportOpenAPI(c *gin.Context) {
 		return
 	}
 
-	connectorID := uuid.New().String()
-	_, err = database.DB.NamedExec(`INSERT INTO connectors (id, tenant_id, name, type, base_url, spec_url, spec_content, status, created_at, updated_at)
-		VALUES (:id, :tenant_id, :name, 'openapi', :base_url, :spec_url, :spec_content, 'active', NOW(), NOW())`, map[string]interface{}{
-		"id":           connectorID,
-		"tenant_id":    tenantID,
-		"name":         req.Name,
-		"base_url":     req.BaseURL,
-		"spec_url":     req.SpecURL,
-		"spec_content": req.SpecContent,
-	})
-	if err != nil {
-		log.Printf("Failed to create connector: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create connector", "details": err.Error()})
-		return
+	var connectorID string
+	if req.ConnectorID != "" && strings.TrimSpace(req.ConnectorID) != "" {
+		// 用户已经选择了已有连接器，复用它
+		connectorID = req.ConnectorID
+		// 检查连接器是否存在且属于当前租户
+		var count int
+		database.DB.Get(&count, "SELECT COUNT(*) FROM connectors WHERE id = ? AND tenant_id = ?", connectorID, tenantID)
+		if count == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "选择的连接器不存在或不属于当前租户"})
+			return
+		}
+		// 更新 base_url 如果提供了
+		if req.BaseURL != "" {
+			database.DB.Exec("UPDATE connectors SET base_url = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?", req.BaseURL, connectorID, tenantID)
+		}
+	} else {
+		// 没有选择已有连接器，新建连接器
+		connectorID = uuid.New().String()
+		_, err = database.DB.NamedExec(`INSERT INTO connectors (id, tenant_id, name, type, base_url, spec_url, spec_content, status, created_at, updated_at)
+			VALUES (:id, :tenant_id, :name, 'openapi', :base_url, :spec_url, :spec_content, 'active', NOW(), NOW())`, map[string]interface{}{
+			"id":           connectorID,
+			"tenant_id":    tenantID,
+			"name":         req.Name,
+			"base_url":     req.BaseURL,
+			"spec_url":     req.SpecURL,
+			"spec_content": req.SpecContent,
+		})
+		if err != nil {
+			log.Printf("Failed to create connector: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create connector", "details": err.Error()})
+			return
+		}
 	}
 
 	tools := openapi.ConvertToMCPTools(spec)

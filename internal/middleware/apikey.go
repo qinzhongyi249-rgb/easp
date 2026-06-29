@@ -203,6 +203,9 @@ func EmbedTokenAuth() gin.HandlerFunc {
 		c.Set(ContextExternalSystem, claims.ExternalSystem)
 		c.Set(ContextExternalUserID, claims.ExternalUserID)
 		c.Set(ContextExternalTokenRef, claims.ExternalTokenRef)
+		// Set empty APIKey to avoid interface conversion panic in handlers
+		var emptyAPIKey models.APIKey
+		c.Set(ContextAPIKey, emptyAPIKey)
 		if externalToken, ok := auth.GetEmbedExternalUserToken(claims.ExternalTokenRef); ok {
 			c.Request = c.Request.WithContext(mcp.WithUserSSOToken(c.Request.Context(), externalToken))
 		}

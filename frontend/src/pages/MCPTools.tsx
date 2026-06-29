@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Switch, Space, Typography, Popconfirm, App, Dropdown, Checkbox, Tag, Spin, Descriptions, Alert, Card, Statistic, Steps, Drawer } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Switch, Space, Typography, Popconfirm, App, Dropdown, Checkbox, Tag, Spin, Descriptions, Alert, Card, Statistic, Steps, Drawer, Upload } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ImportOutlined, ToolOutlined, MoreOutlined, SearchOutlined, CloudSyncOutlined, ApiOutlined, SafetyCertificateOutlined, CheckCircleOutlined, ExperimentOutlined, EyeOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { MCPTool, MCPToolGovernanceStatus } from '../api/mcpTool';
@@ -88,6 +88,38 @@ const MCPTools: React.FC = () => {
   const [detailTool, setDetailTool] = useState<MCPTool | null>(null);
   const [detailGovernance, setDetailGovernance] = useState<MCPToolGovernanceStatus | null>(null);
   const [detailGovernanceLoading, setDetailGovernanceLoading] = useState(false);
+  // 测试调用弹窗
+  const [testOpen, setTestOpen] = useState(false);
+  const [testTool, setTestTool] = useState<MCPTool | null>(null);
+  const [testArguments, setTestArguments] = useState<string>('{}');
+  const [testUserToken, setTestUserToken] = useState<string>('');
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<string>('');
+  // 批量选择删除
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
+
+  const handleBatchDelete = async () => {
+    if (selectedRowKeys.length === 0) {
+      msg.warning('请先选择要删除的工具');
+      return;
+    }
+    setBatchDeleting(true);
+    let successCount = 0;
+    let failCount = 0;
+    for (const key of selectedRowKeys) {
+      try {
+        await mcpToolApi.delete(currentTenant, key.toString());
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    msg.success(`批量删除完成: 成功 ${successCount}, 失败 ${failCount}`);
+    load();
+    setSelectedRowKeys([]);
+    setBatchDeleting(false);
+  };
 
   const load = async () => {
     if (!currentTenant) return;
@@ -265,6 +297,38 @@ const MCPTools: React.FC = () => {
     }
   };
 
+  const openTest = (tool: MCPTool) => {
+    setTestTool(tool);
+    setTestArguments('{}');
+    setTestUserToken('');
+    setTestResult('');
+    setTestOpen(true);
+  };
+
+  const executeTest = async () => {
+    if (!testTool || !currentTenant) return;
+    setTestLoading(true);
+    setTestResult('');
+    try {
+      let args: any;
+      try {
+        args = JSON.parse(testArguments);
+      } catch (err: unknown) {
+        msg.error('参数JSON格式错误');
+        return;
+      }
+      const res = await mcpToolApi.execute(currentTenant, testTool.id, args, testUserToken || undefined);
+      setTestResult(JSON.stringify(res.data, null, 2));
+      msg.success('调用成功');
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      setTestResult(e.response?.data?.error || '调用失败');
+      msg.error('调用失败');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   const renderGovernanceStatusTag = (status?: string) => {
     if (status === 'granted') return <Tag color="green">已有角色授权</Tag>;
     if (status === 'unavailable') return <Tag color="orange">当前不可生产执行</Tag>;
@@ -295,6 +359,7 @@ const MCPTools: React.FC = () => {
       isMobile ? (
         <Dropdown menu={{ items: [
           { key: 'detail', label: '详情', icon: <EyeOutlined />, onClick: () => openDetail(record) },
+          { key: 'test', label: '测试调用', icon: <ExperimentOutlined />, onClick: () => openTest(record) },
           { key: 'edit', label: isLockedBuiltinTool(record) ? '内置工具不可编辑' : '编辑', icon: <EditOutlined />, disabled: isLockedBuiltinTool(record), onClick: () => { if (isLockedBuiltinTool(record)) return; setEditing(record); form.setFieldsValue({ ...record, status: record.status || 'draft' }); setModalOpen(true); } },
           { key: 'delete', label: isLockedBuiltinTool(record) ? '内置工具不可删除' : '删除', icon: <DeleteOutlined />, danger: true, disabled: isLockedBuiltinTool(record), onClick: () => { if (!isLockedBuiltinTool(record)) onDelete(record.id); } },
         ]}} trigger={['click']}>
@@ -303,6 +368,7 @@ const MCPTools: React.FC = () => {
       ) : (
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(record)}>详情</Button>
+          <Button size="small" icon={<ExperimentOutlined />} onClick={() => openTest(record)}>测试</Button>
           <Button size="small" icon={<EditOutlined />} disabled={isLockedBuiltinTool(record)} onClick={() => { setEditing(record); form.setFieldsValue({ ...record, status: record.status || 'draft' }); setModalOpen(true); }}>编辑</Button>
           <Popconfirm title="确认删除?" onConfirm={() => onDelete(record.id)} disabled={isLockedBuiltinTool(record)}>
             <Button size="small" danger icon={<DeleteOutlined />} disabled={isLockedBuiltinTool(record)}>删除</Button>
@@ -445,6 +511,17 @@ const MCPTools: React.FC = () => {
             ]}
           />
           <Button disabled={!hasActiveFilters} onClick={() => setFilters({ keyword: '' })}>重置</Button>
+          {selectedRowKeys.length > 0 && (
+            <Popconfirm
+              title={`确认删除选中的 ${selectedRowKeys.length} 个 MCP 工具？此操作不可恢复`}
+              onConfirm={handleBatchDelete}
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger icon={<DeleteOutlined />} loading={batchDeleting}>
+                批量删除 ({selectedRowKeys.length})
+              </Button>
+            </Popconfirm>
+          )}
           <Text type="secondary">共 {filteredData.length} / {data.length} 个</Text>
         </Space>
       </div>
@@ -455,6 +532,13 @@ const MCPTools: React.FC = () => {
             loading={loading}
             size={isMobile ? 'small' : 'middle'}
             scroll={isMobile ? { x: 300 } : undefined}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: (keys) => setSelectedRowKeys(keys),
+              getCheckboxProps: (record: MCPTool) => ({
+                disabled: isLockedBuiltinTool(record),
+              }),
+            }}
           />
         </Card>
       </Space>
@@ -535,9 +619,9 @@ const MCPTools: React.FC = () => {
           <Form.Item name="connector_id" label="连接器">
             <Select options={connectors.map(c => ({ label: c.name, value: c.id }))} />
           </Form.Item>
-          <Form.Item name="method" label="方法"><Input placeholder="GET / POST / PUT / DELETE" /></Form.Item>
-          <Form.Item name="endpoint" label="端点"><Input placeholder="/api/resource" /></Form.Item>
-          <Form.Item name="parameters" label="参数"><TextArea rows={3} placeholder='JSON格式' /></Form.Item>
+          <Form.Item name="backend_method" label="方法"><Input placeholder="GET / POST / PUT / DELETE" /></Form.Item>
+          <Form.Item name="backend_path" label="路径"><Input placeholder="/api/resource" /></Form.Item>
+          <Form.Item name="input_schema" label="输入Schema"><TextArea rows={5} placeholder='JSON格式，如 {"type":"object","properties":{"id":{"type":"string"}}}' /></Form.Item>
           <Form.Item name="status" label="生命周期" initialValue="draft">
             <Select options={[
               { value: 'draft', label: '草稿' },
@@ -577,11 +661,41 @@ const MCPTools: React.FC = () => {
 
           {importMode !== 'rest' && (
             <>
-              <Form.Item name="spec_url" label="OpenAPI规范URL" tooltip="可填远程 OpenAPI JSON/YAML 地址；如填写下方内容，可留空。" rules={[{ required: !importForm.getFieldValue('spec_content'), message: '请输入OpenAPI URL或规范内容' }]}>
+              <Form.Item name="spec_url" label="OpenAPI规范URL" tooltip="可填远程 OpenAPI JSON/YAML 地址；也可本地上传文件或直接粘贴内容。" rules={[
+                {
+                  validator: () => {
+                    const content = importForm.getFieldValue('spec_content');
+                    const url = importForm.getFieldValue('spec_url');
+                    if (!content && !url) {
+                      return Promise.reject(new Error('请输入OpenAPI URL、上传文件或粘贴规范内容'));
+                    }
+                    return Promise.resolve();
+                  }
+                }
+              ]} dependencies={['spec_content']}>
                 <Input placeholder="https://api.example.com/openapi.json" />
               </Form.Item>
-              <Form.Item name="spec_content" label="OpenAPI规范内容" tooltip="粘贴 OpenAPI JSON/YAML 内容；优先使用此内容。">
-                <TextArea rows={5} placeholder='{"openapi":"3.0.0","info":...,"paths":...}' />
+              <Form.Item label="本地文件上传" tooltip="上传本地 OpenAPI JSON/YAML 文件，上传后内容会自动填入下方规范文本框">
+                <Upload
+                  accept=".json,.yaml,.yml"
+                  beforeUpload={(file) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                      const content = e.target?.result as string;
+                      importForm.setFieldsValue({ spec_content: content });
+                      // 触发重新校验，更新 URL 必填状态
+                      importForm.validateFields(['spec_url']);
+                    };
+                    reader.readAsText(file);
+                    return false; // 不上传到服务器，只读取内容
+                  }}
+                  fileList={[]}
+                >
+                  <Button>选择文件</Button>
+                </Upload>
+              </Form.Item>
+              <Form.Item name="spec_content" label="OpenAPI规范内容" tooltip="粘贴 OpenAPI JSON/YAML 内容；优先使用此内容。" dependencies={['spec_url']}>
+                <TextArea rows={8} placeholder='{"openapi":"3.0.0","info":...,"paths":...}' />
               </Form.Item>
             </>
           )}
@@ -703,6 +817,57 @@ const MCPTools: React.FC = () => {
               ))}
             </div>
           </>
+        )}
+      </Modal>
+
+      {/* 测试调用弹窗 */}
+      <Modal
+        title={`测试调用 ${testTool?.name}`}
+        open={testOpen}
+        onCancel={() => setTestOpen(false)}
+        width={isMobile ? '95%' : 700}
+        footer={[
+          <Button key="cancel" onClick={() => setTestOpen(false)}>关闭</Button>,
+          <Button key="execute" type="primary" loading={testLoading} onClick={executeTest}>执行调用</Button>,
+        ]}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <Text strong>调用参数 (JSON格式)</Text>
+          <TextArea
+            rows={8}
+            value={testArguments}
+            onChange={(e) => setTestArguments(e.target.value)}
+            placeholder='{"user_id": "123"}'
+            style={{ marginTop: 8 }}
+          />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <Text strong>用户 Token (可选)</Text>
+          <Input.Password
+            value={testUserToken}
+            onChange={(e) => setTestUserToken(e.target.value)}
+            placeholder='当连接器需要透传用户Token时，在此手动录入'
+            style={{ marginTop: 8 }}
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            此功能用于测试 {`credential_mode=user_token`} 的连接器，手动录入业务系统用户登录Token进行透传测试。
+          </Text>
+        </div>
+        {testResult && (
+          <div>
+            <Text strong>调用结果</Text>
+            <pre style={{
+              marginTop: 8,
+              padding: 12,
+              backgroundColor: '#f5f5f5',
+              borderRadius: 4,
+              maxHeight: 300,
+              overflow: 'auto',
+              fontSize: 12
+            }}>
+              {testResult}
+            </pre>
+          </div>
         )}
       </Modal>
     </div>

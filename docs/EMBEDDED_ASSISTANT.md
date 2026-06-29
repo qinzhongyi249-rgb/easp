@@ -91,13 +91,14 @@ X-EASP-Signature: <signature>
 
 请求体：
 
-```json
-{
-  "tenant_id": "tenant_xxx",
-  "external_system": "crm",
-  "external_user_id": "u10086"
-}
-```
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `tenant_id` | 是 | EASP 租户 ID |
+| `external_system` | 是 | 业务系统标识，和配置一致 |
+| `external_user_id` | 是 | 业务用户 ID（需要先导入绑定） |
+| `display_name` | 否 | 业务用户显示名 |
+| `external_access_token` | 见说明 | **如果连接器配置 `credential_mode = user_token`，必须传此参数**，透传业务用户当前登录 Token，供 MCP 工具调用第三方接口鉴权使用 |
+| `external_token_expires_at` | 否 | Token 过期时间戳（Unix 秒），不传默认 2 小时过期 |
 
 成功响应：
 
@@ -227,6 +228,7 @@ EASPAssistant.init({
   tenantId: 'tenant_xxx',
   title: 'AI 助手',
   position: 'right-bottom',
+  executionMode: 'normal', // 👈 执行模式：sandbox=纯聊天不调用工具（默认），normal=真实调用用户权限内 MCP/Skill 工具
 
   // 由你的后端换 token，前端不要接触 app_secret
   tokenProvider: async () => {
@@ -313,7 +315,43 @@ document.getElementById('easp-assistant').contentWindow.postMessage({
 
 ---
 
-## 6. 历史会话接口（可选）
+## 新增功能说明
+
+### 执行模式（execution_mode）
+
+嵌入式 AI 助手支持两种执行模式：
+
+| 模式 | 说明 | 使用场景 |
+|------|------|----------|
+| `sandbox` | **默认**，纯聊天不调用任何工具 | 仅问答咨询，不需要调用业务系统接口 |
+| `normal` | 真实调用用户权限范围内的 MCP/Skill 工具 | 需要 AI 助手帮用户查询/操作业务系统数据 |
+
+开启方式：在 JS SDK 初始化时加上：
+```javascript
+executionMode: 'normal'
+```
+
+### MCP 工具透传业务 Token
+
+如果你的 MCP 连接器需要使用当前登录用户的 Token 鉴权，请：
+
+1. **EASP 控制台配置连接器**：
+   - 凭据模式选择 `user_token`
+   - 用户 Token 请求头名称：填写你的业务系统 Token 头（默认 `Authorization`）
+   - 用户 Token 前缀：填写前缀（默认 `Bearer`，不需要前缀留空即可）
+
+2. **业务后端在换 Token 时传入**：
+   在 `POST /api/v1/embed/token/exchange` 请求体中增加 `external_access_token` 字段，值为当前业务用户的登录 Token。
+
+EASP 会自动暂存 Token 并在 MCP 调用时注入到请求头中，第三方接口就能拿到用户 Token 完成鉴权。
+
+### 新建对话
+
+弹窗右上角自带「新建对话」按钮，用户点击即可清空历史开始新对话，不需要刷新页面。
+
+---
+
+## 7. 历史会话接口（可选）
 
 如果你的业务系统需要展示或归档用户自己的 AI 会话记录，可使用 `easp-api-token` 调用：
 
@@ -346,6 +384,7 @@ easp-api-token: <token>
 | `TENANT_UNAVAILABLE` | 租户不可用、停用或到期 | 联系 EASP 管理员 |
 | `EXTERNAL_USER_NOT_IMPORTED` | 外部用户未导入/未绑定 | 先在 EASP 导入并绑定该用户 |
 | `EASP_USER_INACTIVE` | 绑定的 EASP 用户不存在或被停用 | 联系 EASP 管理员启用/修复绑定 |
+| `查询失败，当前请求缺少可用的SSO登录用户Token` | MCP 工具需要透传业务 Token，但未传入 `external_access_token` | 在 token exchange 时传入业务用户当前登录 Token |
 
 ---
 

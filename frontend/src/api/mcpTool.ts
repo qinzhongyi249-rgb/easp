@@ -54,4 +54,6 @@ export const mcpToolApi = {
     client.delete(`/tenants/${tenantId}/mcp-tools/${id}`),
   toggleEnabled: (tenantId: string, id: string, enabled: boolean) =>
     client.put(`/tenants/${tenantId}/mcp-tools/${id}/enabled`, { enabled }),
+  execute: (tenantId: string, id: string, args: any, userToken?: string) =>
+    client.post(`/tenants/${tenantId}/mcp-tools/${id}/execute`, { arguments: args, user_token: userToken }),
 };

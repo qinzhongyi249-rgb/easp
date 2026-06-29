@@ -85,13 +85,13 @@ const Login: React.FC = () => {
           window.location.href = `${data.callback_url}?token=${data.tokens.access_token}&biz_token=${data.biz_token || ''}`;
           return;
         }
-        navigate('/dashboard', { replace: true });
+        navigate('/', { replace: true });
         return;
       }
 
       await login(values.identifier, values.password, values.tenant_id);
       message.success('登录成功');
-      navigate('/dashboard', { replace: true });
+      navigate('/', { replace: true });
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
       message.error(e.response?.data?.error || '账号或密码错误');

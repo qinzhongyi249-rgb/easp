@@ -100,24 +100,31 @@ func (r *ExternalUserBindingRepository) Search(tenantID, externalSystem, keyword
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
+	// 查询只返回对应用户仍然存在（未删除）的绑定
+	// 过滤掉已删除用户的脏绑定
+	// 未绑定用户的（user_id 为空）保留，只过滤已绑定但用户已删除的
+	where := "eub.tenant_id = ?"
 	args := []any{tenantID}
-	where := "tenant_id = ?"
 	if externalSystem != "" {
-		where += " AND external_system = ?"
+		where += " AND eub.external_system = ?"
 		args = append(args, externalSystem)
 	}
 	if status != "" {
-		where += " AND status = ?"
+		where += " AND eub.status = ?"
 		args = append(args, status)
 	}
 	if keyword != "" {
 		like := "%" + strings.TrimSpace(keyword) + "%"
-		where += " AND (external_user_id LIKE ? OR display_name LIKE ? OR email LIKE ? OR phone LIKE ?)"
+		where += " AND (eub.external_user_id LIKE ? OR eub.display_name LIKE ? OR eub.email LIKE ? OR eub.phone LIKE ?)"
 		args = append(args, like, like, like, like)
 	}
+	// 只过滤已绑定但用户已删除的情况
+	// 使用 EXISTS 并强制排序规则一致，避免字符集排序规则不匹配问题
+	where += " AND (eub.user_id = '' OR EXISTS (SELECT 1 FROM users u WHERE u.id = eub.user_id COLLATE utf8mb4_general_ci AND u.deleted_at IS NULL))"
 	args = append(args, limit)
 	var bindings []models.ExternalUserBinding
-	err := database.DB.Select(&bindings, "SELECT * FROM external_user_bindings WHERE "+where+" ORDER BY created_at DESC LIMIT ?", args...)
+	err := database.DB.Select(&bindings, `SELECT eub.* FROM external_user_bindings eub 
+		WHERE `+where+` ORDER BY eub.created_at DESC LIMIT ?`, args...)
 	return bindings, err
 }
 

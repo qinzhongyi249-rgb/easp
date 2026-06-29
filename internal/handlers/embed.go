@@ -19,7 +19,6 @@ import (
 	"github.com/easp-platform/easp/internal/database"
 	"github.com/easp-platform/easp/internal/middleware"
 	"github.com/easp-platform/easp/internal/models"
-	"github.com/easp-platform/easp/internal/modelservice"
 	"github.com/easp-platform/easp/internal/repositories"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -88,14 +87,109 @@ func (h *EmbedHandler) TokenExchange(c *gin.Context) {
 		return
 	}
 	binding, err := repositories.NewExternalUserBindingRepository().GetActive(req.TenantID, req.ExternalSystem, req.ExternalUserID)
-	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "EXTERNAL_USER_NOT_IMPORTED", "message": "外部用户未导入 EASP，无法换取嵌入式 Token"})
-		return
-	}
 	var user models.User
-	if err := database.DB.Get(&user, "SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", binding.UserID, req.TenantID); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "EASP_USER_INACTIVE", "message": "绑定的 EASP 用户不存在或未启用"})
-		return
+	if err != nil {
+		// 如果开启了 auto_create_user，则自动创建 EASP 用户和绑定
+		if !app.AutoCreateUser {
+			c.JSON(http.StatusForbidden, gin.H{"error": "EXTERNAL_USER_NOT_IMPORTED", "message": "外部用户未导入 EASP，无法换取嵌入式 Token"})
+			return
+		}
+		// 自动创建用户
+		// 检查租户用户上限
+		tenant, err := repositories.NewTenantRepository().GetByID(req.TenantID)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "TENANT_UNAVAILABLE", "message": "租户不存在或不可用"})
+			return
+		}
+		// 检查租户是否超过用户上限
+		if tenant.MaxUsers > 0 {
+			count, err := repositories.NewUserRepository().CountByTenant(req.TenantID)
+			if err == nil && count >= tenant.MaxUsers {
+				c.JSON(http.StatusForbidden, gin.H{"error": "TENANT_USER_LIMIT_REACHED", "message": "租户已达到用户数量上限"})
+				return
+			}
+		}
+		// 生成随机密码，account 使用 external_system + "_" + external_user_id 保证唯一性
+		account := strings.ToLower(req.ExternalSystem + "_" + req.ExternalUserID)
+		// 检查 account 是否已存在
+		if existing, err := repositories.NewUserRepository().GetByTenantAndAccount(req.TenantID, account); err == nil && existing != nil {
+			// 用户已存在，说明绑定记录丢失，重新创建绑定
+			binding = &models.ExternalUserBinding{
+				TenantID:       req.TenantID,
+				UserID:         existing.ID,
+				ExternalSystem: req.ExternalSystem,
+				ExternalUserID: req.ExternalUserID,
+				DisplayName:    req.DisplayName,
+				Email:          req.Email,
+				Phone:          req.Phone,
+				Status:         "active",
+			}
+			if err := repositories.NewExternalUserBindingRepository().Upsert(binding); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "FAILED_CREATE_BINDING", "message": "创建用户绑定失败"})
+				return
+			}
+			user = *existing
+		} else {
+			// 真正创建新用户
+			defaultPassword := "external-" + uuid.NewString()
+			passwordHash, _ := bcrypt.GenerateFromPassword([]byte(defaultPassword), bcrypt.DefaultCost)
+			displayName := req.DisplayName
+			if displayName == "" {
+				displayName = req.ExternalUserID
+			}
+			user = models.User{
+				ID:          uuid.NewString(),
+				Account:     account,
+				TenantID:    req.TenantID,
+				Email:       req.Email,
+				DisplayName: displayName,
+				Phone:       req.Phone,
+				PasswordHash: string(passwordHash),
+				Status:      "active",
+				SSOProvider: "embed",
+				SSOUserID:   req.ExternalUserID,
+			}
+			if err := repositories.NewUserRepository().Create(&user); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "FAILED_CREATE_USER", "message": "创建 EASP 用户失败"})
+				return
+			}
+			// 创建绑定
+			binding = &models.ExternalUserBinding{
+				TenantID:       req.TenantID,
+				UserID:         user.ID,
+				ExternalSystem: req.ExternalSystem,
+				ExternalUserID: req.ExternalUserID,
+				DisplayName:    displayName,
+				Email:          req.Email,
+				Phone:          req.Phone,
+				Status:         "active",
+			}
+			if err := repositories.NewExternalUserBindingRepository().Upsert(binding); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "FAILED_CREATE_BINDING", "message": "创建用户绑定失败"})
+				return
+			}
+			// 分配默认角色
+			if app.DefaultRoleIDs != nil && *app.DefaultRoleIDs != "" {
+				var roleIDs []string
+				_ = json.Unmarshal([]byte(*app.DefaultRoleIDs), &roleIDs)
+				for _, roleID := range roleIDs {
+					roleID = strings.TrimSpace(roleID)
+					if roleID == "" {
+						continue
+					}
+					role, err := repositories.NewRoleRepository().GetByID(roleID)
+					if err != nil || role.IsSystem || role.TenantID != req.TenantID {
+						continue
+					}
+					_ = repositories.NewUserRoleRepository().Assign(user.ID, roleID)
+				}
+			}
+		}
+	} else {
+		if err := database.DB.Get(&user, "SELECT * FROM users WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND status = 'active'", binding.UserID, req.TenantID); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "EASP_USER_INACTIVE", "message": "绑定的 EASP 用户不存在或未启用"})
+			return
+		}
 	}
 	scopes := []string{"assistant:chat", "assistant:history"}
 	if app.AllowedScopes != nil && *app.AllowedScopes != "" {
@@ -120,6 +214,24 @@ func (h *EmbedHandler) TokenExchange(c *gin.Context) {
 	}
 	database.DB.Exec("UPDATE external_user_bindings SET last_login_at = NOW(), updated_at = NOW() WHERE id = ?", binding.ID)
 	repositories.NewTenantEmbedAppRepository().Touch(app.AppID)
+
+	// 记录审计日志
+	auditRepo := repositories.NewAuditLogRepository()
+	detail := fmt.Sprintf("External user %s (%s) exchanged token for EASP user %s", req.ExternalUserID, req.ExternalSystem, user.ID)
+	detailPtr := &detail
+	auditLog := &models.AuditLog{
+		TenantID:       req.TenantID,
+		UserID:         &user.ID,
+		Tool:           "embed_token_exchange",
+		Action:         "exchange",
+		SourceType:     toPtr("embed"),
+		SourceAppID:    &app.AppID,
+		ExternalSystem: &req.ExternalSystem,
+		ExternalUserID: &req.ExternalUserID,
+		Detail:         detailPtr,
+	}
+	_ = auditRepo.Create(auditLog)
+
 	c.Header("easp-api-token", token)
 	c.Header("Access-Control-Expose-Headers", "easp-api-token")
 	c.JSON(http.StatusOK, gin.H{"token": token, "expires_at": exp, "user": gin.H{"id": user.ID, "tenant_id": user.TenantID, "account": user.Account, "display_name": user.DisplayName}})
@@ -234,8 +346,24 @@ func (h *EmbedHandler) SyncExternalUsers(c *gin.Context) {
 			counts[status] = v + 1
 		}
 	}
-	repositories.NewTenantEmbedAppRepository().Touch(app.AppID)
-	c.JSON(http.StatusOK, gin.H{"batch_id": req.BatchID, "items": items, "summary": counts})
+	repositories.NewTenantEmbedAppRepository().Touch(app.AppID);
+
+	// 记录审计日志
+	auditRepo := repositories.NewAuditLogRepository()
+	detail := fmt.Sprintf("Synced %d external users from %s/%s", len(req.Users), req.TenantID, req.ExternalSystem)
+	detailPtr := &detail
+	auditLog := &models.AuditLog{
+		TenantID:       req.TenantID,
+		Tool:           "embed_user_sync",
+		Action:         "sync",
+		SourceType:     toPtr("embed"),
+		SourceAppID:    &app.AppID,
+		ExternalSystem: &req.ExternalSystem,
+		Detail:         detailPtr,
+	}
+	_ = auditRepo.Create(auditLog);
+
+	c.JSON(http.StatusOK, gin.H{"batch_id": req.BatchID, "items": items, "summary": counts});
 }
 
 func (h *EmbedHandler) syncOneExternalUser(tenantID, externalSystem, defaultPassword string, item EmbedUserSyncItem, maxUsers int, userRepo *repositories.UserRepository, bindingRepo *repositories.ExternalUserBindingRepository, identityRepo *repositories.UserIdentityBindingRepository, roleRepo *repositories.RoleRepository, userRoleRepo *repositories.UserRoleRepository) (gin.H, *models.User, string) {
@@ -440,18 +568,31 @@ func getActiveUserByTenantField(tenantID, field, value string) (*models.User, er
 		return nil, sql.ErrNoRows
 	}
 	var user models.User
-	err := database.DB.Get(&user, "SELECT * FROM users WHERE tenant_id = ? AND "+field+" = ? AND deleted_at IS NULL AND status = 'active'", tenantID, value)
+	// 先查找，包括已删除用户
+	err := database.DB.Get(&user, "SELECT * FROM users WHERE tenant_id = ? AND "+field+" = ? AND status = 'active'", tenantID, value)
 	if err != nil {
 		return nil, err
+	}
+	// 如果用户已被软删除，外部同步重新导入时自动恢复
+	if user.DeletedAt != nil {
+		// 恢复用户：清除 deleted_at
+		database.DB.Exec("UPDATE users SET deleted_at = NULL WHERE id = ?", user.ID)
+		user.DeletedAt = nil
 	}
 	return &user, nil
 }
 
 func getActiveUserByIdentity(tenantID, provider, providerUserID string) (*models.User, error) {
 	var user models.User
-	err := database.DB.Get(&user, `SELECT u.* FROM user_identity_bindings i JOIN users u ON u.id = i.user_id WHERE i.tenant_id = ? AND i.provider = ? AND i.provider_user_id = ? AND i.status = 'active' AND u.deleted_at IS NULL AND u.status = 'active'`, tenantID, provider, providerUserID)
+	err := database.DB.Get(&user, `SELECT u.* FROM user_identity_bindings i JOIN users u ON u.id = i.user_id WHERE i.tenant_id = ? AND i.provider = ? AND i.provider_user_id = ? AND i.status = 'active' AND u.status = 'active'`, tenantID, provider, providerUserID)
 	if err != nil {
 		return nil, err
+	}
+	// 如果用户已被软删除，外部同步重新导入时自动恢复
+	if user.DeletedAt != nil {
+		// 恢复用户：清除 deleted_at
+		database.DB.Exec("UPDATE users SET deleted_at = NULL WHERE id = ?", user.ID)
+		user.DeletedAt = nil
 	}
 	return &user, nil
 }
@@ -538,10 +679,14 @@ func verifyEmbedSignature(secretHash, appID, timestamp, nonce string, body map[s
 
 // EmbedChatRequest Embed 聊天请求
 type EmbedChatRequest struct {
-	SessionID string          `json:"session_id"` // 可选，不传则自动创建
-	VisitorID string          `json:"visitor_id"` // 外部访客ID
-	Message   string          `json:"message" binding:"required"`
-	Context   json.RawMessage `json:"context"` // 业务上下文（订单号、用户信息等）
+	SessionID     string          `json:"session_id"`      // 可选，不传则自动创建
+	ConversationID string        `json:"conversation_id"` // 可选，使用对话式存储（主站风格）
+	ExecutionMode string        `json:"execution_mode"`  // sandbox | normal，默认 normal；normal 真实调用 MCP 工具，sandbox 只规划不执行
+	VisitorID     string          `json:"visitor_id"`       // 外部访客ID
+	Message       string          `json:"message" binding:"required"`
+	AssistantName *string         `json:"assistant_name"`   // 自定义助手名称，例如 "XX管理平台助手"，不填则默认 "EASP企业智能服务平台助手"
+	Context       json.RawMessage `json:"context"`          // 业务上下文（订单号、用户信息等）
+	PageContext   map[string]any  `json:"page_context"`     // 页面上下文，和主站一致
 }
 
 // EmbedSessionResponse 会话响应
@@ -569,9 +714,13 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 	}
 
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
-	userID := c.GetString(middleware.ContextEmbedUserID)
-	apiKeyVal, _ := c.Get(middleware.ContextAPIKey)
-	apiKey := apiKeyVal.(models.APIKey)
+	// userID is already obtained in middleware, stored in context, not needed here
+	var apiKey *models.APIKey
+	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
+		if ak, ok := apiKeyVal.(models.APIKey); ok {
+			apiKey = &ak
+		}
+	}
 
 	// 处理会话
 	sessionID := req.SessionID
@@ -589,10 +738,14 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 			contextJSON = &s
 		}
 
+		var apiKeyID string
+		if apiKey != nil {
+			apiKeyID = apiKey.ID
+		}
 		_, err := database.DB.Exec(`
 			INSERT INTO embed_sessions (id, tenant_id, api_key_id, visitor_id, metadata, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-			sessionID, tenantID, apiKey.ID, visitorID, contextJSON)
+			sessionID, tenantID, apiKeyID, visitorID, contextJSON)
 		if err != nil {
 			log.Printf("EmbedHandler: failed to create session: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
@@ -631,6 +784,13 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 
 	// 构建消息列表
 	var messages []AssistantMessage
+	// 添加系统提示：嵌入式场景使用自定义名称，不主动列出不可用权限
+	assistantName := "EASP企业智能服务平台助手"
+	if req.AssistantName != nil && *req.AssistantName != "" {
+		assistantName = *req.AssistantName
+	}
+	systemPrompt := fmt.Sprintf("你是 %s。\n你可以帮助用户查询业务数据、操作业务功能，请根据用户需求，调用对应工具完成任务。\n\n规则：\n- 需要操作/查询时优先调用工具，不猜测。\n- 输出尽量精简：先结论，少铺垫；查询结果只列关键字段。\n- 工具返回的数据优先于记忆和页面上下文。\n- 无权限或无对应工具时直接说明。", assistantName)
+	messages = append(messages, AssistantMessage{Role: "system", Content: systemPrompt})
 	// 添加业务上下文作为系统消息
 	if len(req.Context) > 0 {
 		contextMsg := fmt.Sprintf("业务上下文信息: %s", string(req.Context))
@@ -654,41 +814,24 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 		return
 	}
 
-	// 构建模型消息
-	modelMessages := []modelservice.Message{
-		{Role: "system", Content: "你是一个智能助手，帮助用户解答问题。请用简洁专业的语气回答。"},
+	// 完整工具调用流程（和主站一致，多轮 + 流式输出执行过程）
+	// 直接走和主站一样的完整流程，只需要把 ExecutionMode 传入，因为 messages 已经构建好了
+	// 重新构造请求绑定到 gin.Context 方便 ChatStream 读取
+	executionMode := req.ExecutionMode
+	if executionMode == "" {
+		executionMode = "normal" // 默认真实调用工具
 	}
-	for _, m := range messages {
-		modelMessages = append(modelMessages, modelservice.Message{Role: m.Role, Content: m.Content})
+	var bindReq = AssistantRequest{
+		ConversationID: sessionID,
+		Messages:       messages,
+		ExecutionMode:  executionMode,
+		PageContext:    req.PageContext,
 	}
-
-	// 调用模型（非流式，简化实现）
-	response, err := h.chatHandler.callModelWithTools(tenantID, modelMessages, nil)
-	if err != nil {
-		log.Printf("EmbedHandler: model call failed: %v", err)
-		sendSSE(c, "error", map[string]string{"message": "模型调用失败"})
-		sendSSE(c, "done", nil)
-		return
-	}
-
-	// 记录 token 消耗
-	if response.InputTokens > 0 || response.OutputTokens > 0 {
-		RecordModelUsageWithContext(tenantID, userID, response.Provider, response.Model,
-			"/embed/chat", response.InputTokens, response.OutputTokens, response.CachedTokens, 0,
-			"embed", "嵌入式助手", "embed", sessionID, "")
-	}
-
-	// 发送响应
-	sendSSE(c, "delta", map[string]string{"content": response.Content})
-	sendSSE(c, "done", nil)
-
-	// 保存助手消息
-	assistantMsgID := uuid.New().String()
-	database.DB.Exec(`
-		INSERT INTO embed_messages (id, session_id, role, content, created_at)
-		VALUES (?, ?, 'assistant', ?, NOW())`,
-		assistantMsgID, sessionID, response.Content)
-	database.DB.Exec("UPDATE embed_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = ?", sessionID)
+	// 重新序列化 body 让 ChatStream.ShouldBindJSON 能读取
+	bodyBytes, _ := json.Marshal(bindReq)
+	c.Request.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+	// 直接走和主站一样的完整流程，工具调用多轮循环，流式输出每一步
+	h.chatHandler.ChatStream(c)
 }
 
 // ListAssistantConversations 查询当前嵌入用户自己的助手历史会话。
@@ -733,8 +876,12 @@ func (h *EmbedHandler) GetAssistantConversationMessages(c *gin.Context) {
 // POST /embed/v1/sessions
 func (h *EmbedHandler) CreateSession(c *gin.Context) {
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
-	apiKeyVal, _ := c.Get(middleware.ContextAPIKey)
-	apiKey := apiKeyVal.(models.APIKey)
+	var apiKey *models.APIKey
+	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
+		if ak, ok := apiKeyVal.(models.APIKey); ok {
+			apiKey = &ak
+		}
+	}
 
 	var req struct {
 		VisitorID string          `json:"visitor_id"`

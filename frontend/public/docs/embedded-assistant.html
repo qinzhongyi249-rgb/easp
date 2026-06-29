@@ -1,77 +1,116 @@
 <!doctype html>
-<html lang="zh-CN">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EASP 嵌入式 AI 助手第三方接入手册</title>
-  <style>
-    body{margin:0;background:#f6f8fb;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif}
-    .wrap{max-width:980px;margin:0 auto;padding:32px 18px 72px}
-    .card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 10px 32px rgba(15,23,42,.06);padding:28px}
-    .top{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:18px}
-    .badge{background:#e8f2ff;color:#0958d9;border:1px solid #bae0ff;padding:6px 10px;border-radius:999px;font-size:13px}
-    a{color:#1677ff;text-decoration:none}
-    h1{font-size:32px;margin:12px 0 18px}
-    h2{margin-top:36px;padding-top:16px;border-top:1px solid #eef2f7}
-    h3{margin-top:24px}
-    p,li{line-height:1.8}
-    pre{overflow:auto;background:#0f172a;color:#e5e7eb;padding:16px;border-radius:12px;line-height:1.55}
-    code{background:#eef2ff;color:#3730a3;padding:2px 5px;border-radius:5px}
-    pre code{background:transparent;color:inherit;padding:0}
-    blockquote{margin:12px 0;padding:12px 16px;background:#f0f7ff;border-left:4px solid #1677ff;border-radius:8px}
-    table{width:100%;border-collapse:collapse;margin:12px 0;display:block;overflow-x:auto}
-    th,td{border:1px solid #e5e7eb;padding:9px 10px;text-align:left;white-space:nowrap}
-    th{background:#f8fafc}
-    ul,ol{padding-left:24px}
-    @media(max-width:600px){.card{padding:18px}h1{font-size:26px}.top{align-items:flex-start;flex-direction:column}}
-  </style>
+<meta charset="utf-8">
+<title>EASP 接入文档</title>
+<style>
+body{
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-width: 980px;
+  margin: 40px auto;
+  padding: 0 24px;
+  line-height: 1.7;
+  color: #172033;
+}
+pre{
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 16px;
+  border-radius: 8px;
+  overflow: auto;
+}
+code{
+  background: #f1f5f9;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+pre code{
+  background: transparent;
+  padding: 0;
+}
+table{
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+td, th{
+  border: 1px solid #d9e2ec;
+  padding: 8px;
+  text-align: left;
+}
+blockquote{
+  border-left: 4px solid #1677ff;
+  background: #f5faff;
+  padding: 8px 16px;
+  margin: 16px 0;
+}
+h1{
+  font-size: 2em;
+  margin-top: 0.67em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+h2{
+  font-size: 1.5em;
+  margin-top: 1em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+h3{
+  font-size: 1.25em;
+  margin-top: 1em;
+}
+</style>
 </head>
 <body>
-  <main class="wrap">
-    <section class="card">
-      <div class="top">
-        <span class="badge">Third-party Integration Manual</span>
-        <a href="/docs/embedded-assistant.md">查看 Markdown 原文</a>
-      </div>
-      <h1 id="easp-ai">EASP 嵌入式 AI 助手第三方接入手册</h1>
+<h1 id="easp-嵌入式-ai-助手第三方接入手册">EASP 嵌入式 AI
+助手第三方接入手册</h1>
 <blockquote>
-<p>本文面向<strong>第三方业务系统开发者/集成方</strong>，说明你需要在自己的业务系统里完成哪些工作，才能把 EASP AI 助手嵌入到 H5/PC 页面。<br />
-EASP 内部的权限、用户绑定、Token 校验、AI 助手、工具/Skill/MCP 执行链路由 EASP 平台负责，第三方系统不要自行实现或绕过。</p>
+<p>本文面向<strong>第三方业务系统开发者/集成方</strong>，说明你需要在自己的业务系统里完成哪些工作，才能把
+EASP AI 助手嵌入到 H5/PC 页面。 EASP 内部的权限、用户绑定、Token
+校验、AI 助手、工具/Skill/MCP 执行链路由 EASP
+平台负责，第三方系统不要自行实现或绕过。</p>
 </blockquote>
-<p>在线手册：<code>/docs/embedded-assistant.html</code>；Markdown 原文：<code>/docs/embedded-assistant.md</code>。</p>
+<p>在线手册：<code>/docs/embedded-assistant.html</code>；Markdown
+原文：<code>/docs/embedded-assistant.md</code>。</p>
 <hr />
-<h2 id="1">1. 接入前准备</h2>
+<h2 id="接入前准备">1. 接入前准备</h2>
 <p>请先从 EASP 租户管理员处获取以下信息：</p>
 <table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>参数</th>
 <th>说明</th>
 <th>示例</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>tenant_id</code></td>
 <td>EASP 租户 ID</td>
 <td><code>tenant_xxx</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>app_id</code></td>
 <td>嵌入接入应用 ID</td>
 <td><code>app_xxx</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>app_secret</code></td>
 <td>应用密钥，只展示一次，请放在业务系统服务端</td>
 <td><code>easp_secret_xxx</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>external_system</code></td>
 <td>你的业务系统标识，需要与 EASP 接入应用配置一致</td>
 <td><code>crm</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td>EASP 地址</td>
 <td>EASP 平台访问地址</td>
 <td><code>https://easp.example.com</code></td>
@@ -79,17 +118,20 @@ EASP 内部的权限、用户绑定、Token 校验、AI 助手、工具/Skill/MC
 </tbody>
 </table>
 <p>接入前还需要确认：</p>
-<ol>
+<ol type="1">
 <li>EASP 管理后台已创建「嵌入接入应用」。</li>
-<li>你的业务系统域名已加入应用的 <code>allowed_origins</code> 白名单。</li>
-<li>需要使用助手的外部用户已在 EASP 完成导入/绑定，并已分配 EASP 角色和工具权限。</li>
+<li>你的业务系统域名已加入应用的 <code>allowed_origins</code>
+白名单。</li>
+<li>需要使用助手的外部用户已在 EASP 完成导入/绑定，并已分配 EASP
+角色和工具权限。</li>
 </ol>
 <blockquote>
-<p>第三方系统只传递“当前登录的是哪个外部用户”；该用户能用哪些 AI 能力，由 EASP 的用户、角色、工具、Skill、MCP 权限实时决定。</p>
+<p>第三方系统只传递“当前登录的是哪个外部用户”；该用户能用哪些 AI
+能力，由 EASP 的用户、角色、工具、Skill、MCP 权限实时决定。</p>
 </blockquote>
 <hr />
-<h2 id="2">2. 接入总流程</h2>
-<pre><code class="language-text">业务系统用户登录
+<h2 id="接入总流程">2. 接入总流程</h2>
+<pre class="text"><code>业务系统用户登录
   ↓
 业务系统前端加载 EASP JS SDK 或 iframe
   ↓
@@ -103,286 +145,291 @@ EASP 返回 easp-api-token
   ↓
 业务系统前端把 easp-api-token 交给 SDK/iframe
   ↓
-用户开始使用嵌入式 AI 助手
-</code></pre>
+用户开始使用嵌入式 AI 助手</code></pre>
 <p>第三方系统需要实现的只有三件事：</p>
-<ol>
-<li><strong>服务端换 Token</strong>：保护 <code>app_secret</code>，向 EASP 换取 <code>easp-api-token</code>。</li>
+<ol type="1">
+<li><strong>服务端换 Token</strong>：保护 <code>app_secret</code>，向
+EASP 换取 <code>easp-api-token</code>。</li>
 <li><strong>页面嵌入助手</strong>：选择 JS SDK 或 iframe。</li>
-<li><strong>传递当前外部用户身份</strong>：把你系统里的用户 ID 映射成 <code>external_user_id</code>。</li>
+<li><strong>传递当前外部用户身份</strong>：把你系统里的用户 ID 映射成
+<code>external_user_id</code>。</li>
 </ol>
 <hr />
-<h2 id="3-easp-api-token">3. 服务端：换取 easp-api-token</h2>
-<h3 id="31">3.1 你需要提供一个自己的后端接口</h3>
+<h2 id="服务端换取-easp-api-token">3. 服务端：换取 easp-api-token</h2>
+<h3 id="你需要提供一个自己的后端接口">3.1
+你需要提供一个自己的后端接口</h3>
 <p>建议在业务系统后端提供接口，例如：</p>
-<pre><code class="language-http">POST /api/easp/embed-token
-Cookie: &lt;业务系统自己的登录态&gt;
-</code></pre>
+<pre class="http"><code>POST /api/easp/embed-token
+Cookie: &lt;业务系统自己的登录态&gt;</code></pre>
 <p>这个接口由你的前端调用。接口内部应完成：</p>
-<ol>
+<ol type="1">
 <li>校验当前用户已登录你的业务系统。</li>
-<li>取出当前用户在你系统中的稳定 ID，作为 <code>external_user_id</code>。</li>
+<li>取出当前用户在你系统中的稳定 ID，作为
+<code>external_user_id</code>。</li>
 <li>用 <code>app_secret</code> 生成签名。</li>
 <li>调用 EASP token exchange 接口。</li>
 <li>把 EASP 返回的 <code>easp-api-token</code> 返回给前端。</li>
 </ol>
 <blockquote>
-<p>不要把 <code>app_secret</code> 放到浏览器、H5、小程序或 App 客户端里。</p>
+<p>不要把 <code>app_secret</code> 放到浏览器、H5、小程序或 App
+客户端里。</p>
 </blockquote>
-<h3 id="32-easp-token-exchange">3.2 调用 EASP Token Exchange</h3>
-<pre><code class="language-http">POST https://easp.example.com/api/v1/embed/token/exchange
+<h3 id="调用-easp-token-exchange">3.2 调用 EASP Token Exchange</h3>
+<pre class="http"><code>POST https://easp.example.com/api/v1/embed/token/exchange
 Content-Type: application/json
 X-EASP-App-Id: &lt;app_id&gt;
 X-EASP-Timestamp: &lt;unix_seconds&gt;
 X-EASP-Nonce: &lt;random_string&gt;
-X-EASP-Signature: &lt;signature&gt;
-</code></pre>
+X-EASP-Signature: &lt;signature&gt;</code></pre>
 <p>请求体：</p>
-<pre><code class="language-json">{
-  &quot;tenant_id&quot;: &quot;tenant_xxx&quot;,
-  &quot;external_system&quot;: &quot;crm&quot;,
-  &quot;external_user_id&quot;: &quot;u10086&quot;
-}
-</code></pre>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;tenant_id&quot;</span><span class="fu">:</span> <span class="st">&quot;tenant_xxx&quot;</span><span class="fu">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_system&quot;</span><span class="fu">:</span> <span class="st">&quot;crm&quot;</span><span class="fu">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_user_id&quot;</span><span class="fu">:</span> <span class="st">&quot;u10086&quot;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>成功响应：</p>
-<pre><code class="language-http">HTTP/1.1 200 OK
+<pre class="http"><code>HTTP/1.1 200 OK
 easp-api-token: &lt;token&gt;
-Access-Control-Expose-Headers: easp-api-token
-</code></pre>
-<pre><code class="language-json">{
-  &quot;token&quot;: &quot;&lt;token&gt;&quot;,
-  &quot;expires_at&quot;: &quot;2026-06-15T16:00:00+08:00&quot;,
-  &quot;user&quot;: {
-    &quot;id&quot;: &quot;easp-user-id&quot;,
-    &quot;tenant_id&quot;: &quot;tenant_xxx&quot;,
-    &quot;display_name&quot;: &quot;张三&quot;
-  }
-}
-</code></pre>
-<h3 id="33">3.3 签名规则</h3>
+Access-Control-Expose-Headers: easp-api-token</code></pre>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;token&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;token&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;expires_at&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-06-15T16:00:00+08:00&quot;</span><span class="fu">,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;user&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;id&quot;</span><span class="fu">:</span> <span class="st">&quot;easp-user-id&quot;</span><span class="fu">,</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;tenant_id&quot;</span><span class="fu">:</span> <span class="st">&quot;tenant_xxx&quot;</span><span class="fu">,</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;display_name&quot;</span><span class="fu">:</span> <span class="st">&quot;张三&quot;</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="签名规则">3.3 签名规则</h3>
 <p>签名 payload 按固定顺序拼接：</p>
-<pre><code class="language-text">app_id=&lt;app_id&gt;&amp;timestamp=&lt;timestamp&gt;&amp;nonce=&lt;nonce&gt;&amp;external_system=&lt;external_system&gt;&amp;external_user_id=&lt;external_user_id&gt;&amp;tenant_id=&lt;tenant_id&gt;
-</code></pre>
+<pre class="text"><code>app_id=&lt;app_id&gt;&amp;timestamp=&lt;timestamp&gt;&amp;nonce=&lt;nonce&gt;&amp;external_system=&lt;external_system&gt;&amp;external_user_id=&lt;external_user_id&gt;&amp;tenant_id=&lt;tenant_id&gt;</code></pre>
 <p>签名密钥：</p>
-<pre><code class="language-text">secret_hash = SHA256(app_secret) 的十六进制字符串
-</code></pre>
+<pre class="text"><code>secret_hash = SHA256(app_secret) 的十六进制字符串</code></pre>
 <p>签名算法：</p>
-<pre><code class="language-text">signature = HMAC-SHA256(secret_hash, payload) 的十六进制字符串
-</code></pre>
-<h3 id="34-nodejs">3.4 Node.js 示例</h3>
-<pre><code class="language-js">import crypto from 'crypto';
-import express from 'express';
-
-const router = express.Router();
-
-const EASP_BASE_URL = 'https://easp.example.com';
-const TENANT_ID = process.env.EASP_TENANT_ID;
-const APP_ID = process.env.EASP_APP_ID;
-const APP_SECRET = process.env.EASP_APP_SECRET;
-const EXTERNAL_SYSTEM = 'crm';
-
-function signEmbedToken({ externalUserId, timestamp, nonce }) {
-  const secretHash = crypto.createHash('sha256').update(APP_SECRET).digest('hex');
-  const payload = [
-    `app_id=${APP_ID}`,
-    `timestamp=${timestamp}`,
-    `nonce=${nonce}`,
-    `external_system=${EXTERNAL_SYSTEM}`,
-    `external_user_id=${externalUserId}`,
-    `tenant_id=${TENANT_ID}`
-  ].join('&amp;');
-
-  return crypto.createHmac('sha256', secretHash).update(payload).digest('hex');
-}
-
-router.post('/api/easp/embed-token', async (req, res) =&gt; {
-  // 1. 校验你自己系统的登录态
-  const currentUser = req.user;
-  if (!currentUser) {
-    return res.status(401).json({ message: '未登录' });
-  }
-
-  // 2. 使用你系统中的稳定用户 ID，对应 EASP 的 external_user_id
-  const externalUserId = String(currentUser.id);
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const signature = signEmbedToken({ externalUserId, timestamp, nonce });
-
-  // 3. 调用 EASP 换取 easp-api-token
-  const easpResp = await fetch(`${EASP_BASE_URL}/api/v1/embed/token/exchange`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-EASP-App-Id': APP_ID,
-      'X-EASP-Timestamp': timestamp,
-      'X-EASP-Nonce': nonce,
-      'X-EASP-Signature': signature
-    },
-    body: JSON.stringify({
-      tenant_id: TENANT_ID,
-      external_system: EXTERNAL_SYSTEM,
-      external_user_id: externalUserId
-    })
-  });
-
-  const data = await easpResp.json().catch(() =&gt; ({}));
-  if (!easpResp.ok) {
-    return res.status(easpResp.status).json(data);
-  }
-
-  // 4. 返回给前端。也可以只返回 token 字段。
-  return res.json({
-    token: data.token || easpResp.headers.get('easp-api-token'),
-    expires_at: data.expires_at,
-    user: data.user
-  });
-});
-
-export default router;
-</code></pre>
+<pre class="text"><code>signature = HMAC-SHA256(secret_hash, payload) 的十六进制字符串</code></pre>
+<h3 id="node.js-示例">3.4 Node.js 示例</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> crypto <span class="im">from</span> <span class="st">&#39;crypto&#39;</span><span class="op">;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> express <span class="im">from</span> <span class="st">&#39;express&#39;</span><span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> router <span class="op">=</span> express<span class="op">.</span><span class="fu">Router</span>()<span class="op">;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> EASP_BASE_URL <span class="op">=</span> <span class="st">&#39;https://easp.example.com&#39;</span><span class="op">;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> TENANT_ID <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">EASP_TENANT_ID</span><span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> APP_ID <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">EASP_APP_ID</span><span class="op">;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> APP_SECRET <span class="op">=</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">EASP_APP_SECRET</span><span class="op">;</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> EXTERNAL_SYSTEM <span class="op">=</span> <span class="st">&#39;crm&#39;</span><span class="op">;</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="kw">function</span> <span class="fu">signEmbedToken</span>({ externalUserId<span class="op">,</span> timestamp<span class="op">,</span> nonce }) {</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> secretHash <span class="op">=</span> crypto<span class="op">.</span><span class="fu">createHash</span>(<span class="st">&#39;sha256&#39;</span>)<span class="op">.</span><span class="fu">update</span>(APP_SECRET)<span class="op">.</span><span class="fu">digest</span>(<span class="st">&#39;hex&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> payload <span class="op">=</span> [</span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`app_id=</span><span class="sc">${</span>APP_ID<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`timestamp=</span><span class="sc">${</span>timestamp<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`nonce=</span><span class="sc">${</span>nonce<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`external_system=</span><span class="sc">${</span>EXTERNAL_SYSTEM<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`external_user_id=</span><span class="sc">${</span>externalUserId<span class="sc">}</span><span class="vs">`</span><span class="op">,</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>    <span class="vs">`tenant_id=</span><span class="sc">${</span>TENANT_ID<span class="sc">}</span><span class="vs">`</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  ]<span class="op">.</span><span class="fu">join</span>(<span class="st">&#39;&amp;&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> crypto<span class="op">.</span><span class="fu">createHmac</span>(<span class="st">&#39;sha256&#39;</span><span class="op">,</span> secretHash)<span class="op">.</span><span class="fu">update</span>(payload)<span class="op">.</span><span class="fu">digest</span>(<span class="st">&#39;hex&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>router<span class="op">.</span><span class="fu">post</span>(<span class="st">&#39;/api/easp/embed-token&#39;</span><span class="op">,</span> <span class="kw">async</span> (req<span class="op">,</span> res) <span class="kw">=&gt;</span> {</span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 1. 校验你自己系统的登录态</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> currentUser <span class="op">=</span> req<span class="op">.</span><span class="at">user</span><span class="op">;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>currentUser) {</span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> res<span class="op">.</span><span class="fu">status</span>(<span class="dv">401</span>)<span class="op">.</span><span class="fu">json</span>({ <span class="dt">message</span><span class="op">:</span> <span class="st">&#39;未登录&#39;</span> })<span class="op">;</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 2. 使用你系统中的稳定用户 ID，对应 EASP 的 external_user_id</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> externalUserId <span class="op">=</span> <span class="bu">String</span>(currentUser<span class="op">.</span><span class="at">id</span>)<span class="op">;</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> timestamp <span class="op">=</span> <span class="bu">Math</span><span class="op">.</span><span class="fu">floor</span>(<span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">/</span> <span class="dv">1000</span>)<span class="op">.</span><span class="fu">toString</span>()<span class="op">;</span></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> nonce <span class="op">=</span> crypto<span class="op">.</span><span class="fu">randomBytes</span>(<span class="dv">16</span>)<span class="op">.</span><span class="fu">toString</span>(<span class="st">&#39;hex&#39;</span>)<span class="op">;</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> signature <span class="op">=</span> <span class="fu">signEmbedToken</span>({ externalUserId<span class="op">,</span> timestamp<span class="op">,</span> nonce })<span class="op">;</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 3. 调用 EASP 换取 easp-api-token</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> easpResp <span class="op">=</span> <span class="cf">await</span> <span class="fu">fetch</span>(<span class="vs">`</span><span class="sc">${</span>EASP_BASE_URL<span class="sc">}</span><span class="vs">/api/v1/embed/token/exchange`</span><span class="op">,</span> {</span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a>    <span class="dt">method</span><span class="op">:</span> <span class="st">&#39;POST&#39;</span><span class="op">,</span></span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a>    <span class="dt">headers</span><span class="op">:</span> {</span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a>      <span class="st">&#39;Content-Type&#39;</span><span class="op">:</span> <span class="st">&#39;application/json&#39;</span><span class="op">,</span></span>
+<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a>      <span class="st">&#39;X-EASP-App-Id&#39;</span><span class="op">:</span> APP_ID<span class="op">,</span></span>
+<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>      <span class="st">&#39;X-EASP-Timestamp&#39;</span><span class="op">:</span> timestamp<span class="op">,</span></span>
+<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>      <span class="st">&#39;X-EASP-Nonce&#39;</span><span class="op">:</span> nonce<span class="op">,</span></span>
+<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>      <span class="st">&#39;X-EASP-Signature&#39;</span><span class="op">:</span> signature</span>
+<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>    <span class="dt">body</span><span class="op">:</span> <span class="bu">JSON</span><span class="op">.</span><span class="fu">stringify</span>({</span>
+<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>      <span class="dt">tenant_id</span><span class="op">:</span> TENANT_ID<span class="op">,</span></span>
+<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>      <span class="dt">external_system</span><span class="op">:</span> EXTERNAL_SYSTEM<span class="op">,</span></span>
+<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>      <span class="dt">external_user_id</span><span class="op">:</span> externalUserId</span>
+<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>    })</span>
+<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> data <span class="op">=</span> <span class="cf">await</span> easpResp<span class="op">.</span><span class="fu">json</span>()<span class="op">.</span><span class="fu">catch</span>(() <span class="kw">=&gt;</span> ({}))<span class="op">;</span></span>
+<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>easpResp<span class="op">.</span><span class="at">ok</span>) {</span>
+<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> res<span class="op">.</span><span class="fu">status</span>(easpResp<span class="op">.</span><span class="at">status</span>)<span class="op">.</span><span class="fu">json</span>(data)<span class="op">;</span></span>
+<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 4. 返回给前端。也可以只返回 token 字段。</span></span>
+<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> res<span class="op">.</span><span class="fu">json</span>({</span>
+<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a>    <span class="dt">token</span><span class="op">:</span> data<span class="op">.</span><span class="at">token</span> <span class="op">||</span> easpResp<span class="op">.</span><span class="at">headers</span><span class="op">.</span><span class="fu">get</span>(<span class="st">&#39;easp-api-token&#39;</span>)<span class="op">,</span></span>
+<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a>    <span class="dt">expires_at</span><span class="op">:</span> data<span class="op">.</span><span class="at">expires_at</span><span class="op">,</span></span>
+<span id="cb10-65"><a href="#cb10-65" aria-hidden="true" tabindex="-1"></a>    <span class="dt">user</span><span class="op">:</span> data<span class="op">.</span><span class="at">user</span></span>
+<span id="cb10-66"><a href="#cb10-66" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb10-67"><a href="#cb10-67" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span>
+<span id="cb10-68"><a href="#cb10-68" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-69"><a href="#cb10-69" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="im">default</span> router<span class="op">;</span></span></code></pre></div>
 <hr />
-<h2 id="4-js-sdk">4. 前端：JS SDK 嵌入</h2>
+<h2 id="前端js-sdk-嵌入">4. 前端：JS SDK 嵌入</h2>
 <p>适合 H5、移动端、需要读取页面上下文的业务系统。</p>
-<pre><code class="language-html">&lt;script src=&quot;https://easp.example.com/embed/assistant.js&quot;&gt;&lt;/script&gt;
-&lt;script&gt;
-EASPAssistant.init({
-  baseUrl: 'https://easp.example.com',
-  tenantId: 'tenant_xxx',
-  title: 'AI 助手',
-  position: 'right-bottom',
-
-  // 由你的后端换 token，前端不要接触 app_secret
-  tokenProvider: async () =&gt; {
-    const res = await fetch('/api/easp/embed-token', {
-      method: 'POST',
-      credentials: 'include'
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    return data.token;
-  },
-
-  // 可选：把当前业务页面上下文传给 AI 助手
-  pageContextProvider: () =&gt; ({
-    url: location.href,
-    title: document.title,
-    page_type: 'customer_detail',
-    business_id: window.__BUSINESS_ID__
-  })
-});
-&lt;/script&gt;
-</code></pre>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode html"><code class="sourceCode html"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">script</span> <span class="er">src</span><span class="ot">=</span><span class="st">&quot;https://easp.example.com/embed/assistant.js&quot;</span><span class="dt">&gt;&lt;/</span><span class="kw">script</span><span class="dt">&gt;</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">script</span><span class="dt">&gt;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>EASPAssistant<span class="op">.</span><span class="fu">init</span>({</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">baseUrl</span><span class="op">:</span> <span class="st">&#39;https://easp.example.com&#39;</span><span class="op">,</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">tenantId</span><span class="op">:</span> <span class="st">&#39;tenant_xxx&#39;</span><span class="op">,</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">title</span><span class="op">:</span> <span class="st">&#39;AI 助手&#39;</span><span class="op">,</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">position</span><span class="op">:</span> <span class="st">&#39;right-bottom&#39;</span><span class="op">,</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 由你的后端换 token，前端不要接触 app_secret</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">tokenProvider</span><span class="op">:</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> res <span class="op">=</span> <span class="cf">await</span> <span class="fu">fetch</span>(<span class="st">&#39;/api/easp/embed-token&#39;</span><span class="op">,</span> {</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>      <span class="dt">method</span><span class="op">:</span> <span class="st">&#39;POST&#39;</span><span class="op">,</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>      <span class="dt">credentials</span><span class="op">:</span> <span class="st">&#39;include&#39;</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    })<span class="op">;</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>res<span class="op">.</span><span class="at">ok</span>) <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">Error</span>(<span class="cf">await</span> res<span class="op">.</span><span class="fu">text</span>())<span class="op">;</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> data <span class="op">=</span> <span class="cf">await</span> res<span class="op">.</span><span class="fu">json</span>()<span class="op">;</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> data<span class="op">.</span><span class="at">token</span><span class="op">;</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">// 可选：把当前业务页面上下文传给 AI 助手</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>  <span class="dt">pageContextProvider</span><span class="op">:</span> () <span class="kw">=&gt;</span> ({</span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>    <span class="dt">url</span><span class="op">:</span> location<span class="op">.</span><span class="at">href</span><span class="op">,</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">title</span><span class="op">:</span> <span class="bu">document</span><span class="op">.</span><span class="at">title</span><span class="op">,</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">page_type</span><span class="op">:</span> <span class="st">&#39;customer_detail&#39;</span><span class="op">,</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">business_id</span><span class="op">:</span> <span class="bu">window</span><span class="op">.</span><span class="at">__BUSINESS_ID__</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>  })</span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;/</span><span class="kw">script</span><span class="dt">&gt;</span></span></code></pre></div>
 <hr />
-<h2 id="5-iframe">5. 前端：iframe 嵌入</h2>
+<h2 id="前端iframe-嵌入">5. 前端：iframe 嵌入</h2>
 <p>适合老系统、第三方门户、需要样式强隔离的页面。</p>
-<pre><code class="language-html">&lt;iframe
-  id=&quot;easp-assistant&quot;
-  src=&quot;https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx&quot;
-  style=&quot;position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;&quot;
-&gt;&lt;/iframe&gt;
-
-&lt;script&gt;
-async function initEASPAssistant() {
-  const res = await fetch('/api/easp/embed-token', {
-    method: 'POST',
-    credentials: 'include'
-  });
-  if (!res.ok) throw new Error(await res.text());
-
-  const data = await res.json();
-  const frame = document.getElementById('easp-assistant');
-
-  frame.contentWindow.postMessage({
-    type: 'EASP_ASSISTANT_TOKEN',
-    token: data.token,
-    context: {
-      url: location.href,
-      title: document.title,
-      page_type: 'customer_detail'
-    }
-  }, 'https://easp.example.com');
-}
-
-initEASPAssistant();
-&lt;/script&gt;
-</code></pre>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode html"><code class="sourceCode html"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">iframe</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ot">  id=</span><span class="st">&quot;easp-assistant&quot;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="ot">  src=</span><span class="st">&quot;https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx&quot;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="ot">  style=</span><span class="st">&quot;position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;&quot;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="dt">&gt;&lt;/</span><span class="kw">iframe</span><span class="dt">&gt;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">script</span><span class="dt">&gt;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">function</span> <span class="fu">initEASPAssistant</span>() {</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> res <span class="op">=</span> <span class="cf">await</span> <span class="fu">fetch</span>(<span class="st">&#39;/api/easp/embed-token&#39;</span><span class="op">,</span> {</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">method</span><span class="op">:</span> <span class="st">&#39;POST&#39;</span><span class="op">,</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">credentials</span><span class="op">:</span> <span class="st">&#39;include&#39;</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> (<span class="op">!</span>res<span class="op">.</span><span class="at">ok</span>) <span class="cf">throw</span> <span class="kw">new</span> <span class="bu">Error</span>(<span class="cf">await</span> res<span class="op">.</span><span class="fu">text</span>())<span class="op">;</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> data <span class="op">=</span> <span class="cf">await</span> res<span class="op">.</span><span class="fu">json</span>()<span class="op">;</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">const</span> frame <span class="op">=</span> <span class="bu">document</span><span class="op">.</span><span class="fu">getElementById</span>(<span class="st">&#39;easp-assistant&#39;</span>)<span class="op">;</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>  frame<span class="op">.</span><span class="at">contentWindow</span><span class="op">.</span><span class="fu">postMessage</span>({</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">type</span><span class="op">:</span> <span class="st">&#39;EASP_ASSISTANT_TOKEN&#39;</span><span class="op">,</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>    <span class="dt">token</span><span class="op">:</span> data<span class="op">.</span><span class="at">token</span><span class="op">,</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">context</span><span class="op">:</span> {</span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>      <span class="dt">url</span><span class="op">:</span> location<span class="op">.</span><span class="at">href</span><span class="op">,</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>      <span class="dt">title</span><span class="op">:</span> <span class="bu">document</span><span class="op">.</span><span class="at">title</span><span class="op">,</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>      <span class="dt">page_type</span><span class="op">:</span> <span class="st">&#39;customer_detail&#39;</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>  }<span class="op">,</span> <span class="st">&#39;https://easp.example.com&#39;</span>)<span class="op">;</span></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a><span class="fu">initEASPAssistant</span>()<span class="op">;</span></span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;/</span><span class="kw">script</span><span class="dt">&gt;</span></span></code></pre></div>
 <p>更新页面上下文：</p>
-<pre><code class="language-js">document.getElementById('easp-assistant').contentWindow.postMessage({
-  type: 'EASP_ASSISTANT_CONTEXT_UPDATE',
-  context: {
-    url: location.href,
-    title: document.title,
-    page_type: 'order_detail',
-    order_id: 'O-10086'
-  }
-}, 'https://easp.example.com');
-</code></pre>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="bu">document</span><span class="op">.</span><span class="fu">getElementById</span>(<span class="st">&#39;easp-assistant&#39;</span>)<span class="op">.</span><span class="at">contentWindow</span><span class="op">.</span><span class="fu">postMessage</span>({</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">type</span><span class="op">:</span> <span class="st">&#39;EASP_ASSISTANT_CONTEXT_UPDATE&#39;</span><span class="op">,</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">context</span><span class="op">:</span> {</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">url</span><span class="op">:</span> location<span class="op">.</span><span class="at">href</span><span class="op">,</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">title</span><span class="op">:</span> <span class="bu">document</span><span class="op">.</span><span class="at">title</span><span class="op">,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">page_type</span><span class="op">:</span> <span class="st">&#39;order_detail&#39;</span><span class="op">,</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">order_id</span><span class="op">:</span> <span class="st">&#39;O-10086&#39;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>}<span class="op">,</span> <span class="st">&#39;https://easp.example.com&#39;</span>)<span class="op">;</span></span></code></pre></div>
 <p>退出或切换账号时清空 Token：</p>
-<pre><code class="language-js">document.getElementById('easp-assistant').contentWindow.postMessage({
-  type: 'EASP_ASSISTANT_LOGOUT'
-}, 'https://easp.example.com');
-</code></pre>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="bu">document</span><span class="op">.</span><span class="fu">getElementById</span>(<span class="st">&#39;easp-assistant&#39;</span>)<span class="op">.</span><span class="at">contentWindow</span><span class="op">.</span><span class="fu">postMessage</span>({</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">type</span><span class="op">:</span> <span class="st">&#39;EASP_ASSISTANT_LOGOUT&#39;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>}<span class="op">,</span> <span class="st">&#39;https://easp.example.com&#39;</span>)<span class="op">;</span></span></code></pre></div>
 <hr />
-<h2 id="6">6. 历史会话接口（可选）</h2>
-<p>如果你的业务系统需要展示或归档用户自己的 AI 会话记录，可使用 <code>easp-api-token</code> 调用：</p>
-<pre><code class="language-http">GET https://easp.example.com/embed/v1/assistant/conversations
-easp-api-token: &lt;token&gt;
-</code></pre>
-<pre><code class="language-http">GET https://easp.example.com/embed/v1/assistant/conversations/:conversationId/messages
-easp-api-token: &lt;token&gt;
-</code></pre>
+<h2 id="历史会话接口可选">6. 历史会话接口（可选）</h2>
+<p>如果你的业务系统需要展示或归档用户自己的 AI 会话记录，可使用
+<code>easp-api-token</code> 调用：</p>
+<pre class="http"><code>GET https://easp.example.com/embed/v1/assistant/conversations
+easp-api-token: &lt;token&gt;</code></pre>
+<pre class="http"><code>GET https://easp.example.com/embed/v1/assistant/conversations/:conversationId/messages
+easp-api-token: &lt;token&gt;</code></pre>
 <p>说明：</p>
 <ul>
 <li>普通嵌入用户只能查询自己的历史会话。</li>
-<li>租户管理员审计/全量查询请在 EASP 管理后台完成，不要混用嵌入式 Token。</li>
+<li>租户管理员审计/全量查询请在 EASP 管理后台完成，不要混用嵌入式
+Token。</li>
 </ul>
 <hr />
-<h2 id="7">7. 常见错误</h2>
+<h2 id="常见错误">7. 常见错误</h2>
 <table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>错误码</th>
 <th>含义</th>
 <th>处理方式</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>EASP_SIGNATURE_REQUIRED</code></td>
 <td>缺少签名请求头</td>
 <td>检查 <code>X-EASP-*</code> 头是否完整</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>INVALID_SIGNATURE</code></td>
 <td>签名错误</td>
-<td>检查 payload 顺序、<code>app_secret</code>、<code>external_user_id</code> 是否一致</td>
+<td>检查 payload
+顺序、<code>app_secret</code>、<code>external_user_id</code>
+是否一致</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>INVALID_TIMESTAMP</code></td>
 <td>时间戳过期或服务器时间偏差过大</td>
 <td>使用当前 Unix 秒级时间戳，确保服务器校时</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>INVALID_EMBED_APP</code></td>
 <td>app 不存在、禁用或与租户/系统不匹配</td>
 <td>联系 EASP 管理员检查接入应用配置</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>ORIGIN_NOT_ALLOWED</code></td>
 <td>当前域名不在白名单</td>
 <td>联系 EASP 管理员添加 <code>allowed_origins</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>TENANT_UNAVAILABLE</code></td>
 <td>租户不可用、停用或到期</td>
 <td>联系 EASP 管理员</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>EXTERNAL_USER_NOT_IMPORTED</code></td>
 <td>外部用户未导入/未绑定</td>
 <td>先在 EASP 导入并绑定该用户</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>EASP_USER_INACTIVE</code></td>
 <td>绑定的 EASP 用户不存在或被停用</td>
 <td>联系 EASP 管理员启用/修复绑定</td>
@@ -390,28 +437,35 @@ easp-api-token: &lt;token&gt;
 </tbody>
 </table>
 <hr />
-<h2 id="8">8. 第三方系统不要做的事</h2>
+<h2 id="第三方系统不要做的事">8. 第三方系统不要做的事</h2>
 <ul>
 <li>不要在前端保存或传输 <code>app_secret</code>。</li>
 <li>不要用 EASP 后台账号密码在第三方前端模拟登录。</li>
-<li>不要把 <code>easp-api-token</code> 当作 EASP 管理后台 JWT 使用。</li>
+<li>不要把 <code>easp-api-token</code> 当作 EASP 管理后台 JWT
+使用。</li>
 <li>不要在第三方系统自行决定 EASP 工具、Skill、MCP 权限。</li>
 <li>不要在外部用户未导入/未绑定时静默创建临时用户。</li>
 <li>不要把 Token 放到 iframe URL query 中。</li>
 </ul>
 <hr />
-<h2 id="9">9. 接入自测清单</h2>
-<ul>
-<li>[ ] 业务系统后端已配置 <code>tenant_id/app_id/app_secret/external_system</code>。</li>
-<li>[ ] <code>app_secret</code> 只存在服务端环境变量或密钥管理系统中。</li>
-<li>[ ] 当前业务域名已加入 EASP 应用白名单。</li>
-<li>[ ] 当前测试用户的 <code>external_user_id</code> 已在 EASP 导入并绑定。</li>
-<li>[ ] <code>/api/easp/embed-token</code> 能成功返回 token。</li>
-<li>[ ] JS SDK 或 iframe 能打开助手并发送消息。</li>
-<li>[ ] Token 过期或 401 时能重新换取 token。</li>
-<li>[ ] 退出/切换账号时会清理旧 token 和会话上下文。</li>
+<h2 id="接入自测清单">9. 接入自测清单</h2>
+<ul class="task-list">
+<li><label><input type="checkbox" />业务系统后端已配置
+<code>tenant_id/app_id/app_secret/external_system</code>。</label></li>
+<li><label><input type="checkbox" /><code>app_secret</code>
+只存在服务端环境变量或密钥管理系统中。</label></li>
+<li><label><input type="checkbox" />当前业务域名已加入 EASP
+应用白名单。</label></li>
+<li><label><input type="checkbox" />当前测试用户的
+<code>external_user_id</code> 已在 EASP 导入并绑定。</label></li>
+<li><label><input type="checkbox" /><code>/api/easp/embed-token</code>
+能成功返回 token。</label></li>
+<li><label><input type="checkbox" />JS SDK 或 iframe
+能打开助手并发送消息。</label></li>
+<li><label><input type="checkbox" />Token 过期或 401 时能重新换取
+token。</label></li>
+<li><label><input type="checkbox" />退出/切换账号时会清理旧 token
+和会话上下文。</label></li>
 </ul>
-    </section>
-  </main>
 </body>
 </html>

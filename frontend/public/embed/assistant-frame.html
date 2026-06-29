@@ -13,6 +13,7 @@
     .msg { max-width:86%; margin:8px 0; padding:10px 12px; border-radius:14px; white-space:pre-wrap; line-height:1.5; font-size:14px; }
     .user { margin-left:auto; background:#1677ff; color:#fff; }
     .assistant { background:#fff; border:1px solid #e5e7eb; color:#111827; }
+    .step{max-width:90%;margin:8px 0;padding:8px 10px;border-radius:12px;background:#f1f5f9;border:1px solid #e2e8f0;font-size:13px}.step-title{display:flex;align-items:center;gap:6px;font-weight:500;color:#334155}.step-dot{width:8px;height:8px;border-radius:50%;background:#94a3b8}.step-dot.running{background:#f59e0b;animation:pulse 2s infinite}.step-dot.done{background:#10b981}.step-dot.error{background:#ef4444}.step-result{margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#475569;white-space:pre-wrap}@keyframes pulse{0%{opacity:1}50%{opacity:.5}100%{opacity:1}}
     .ft { display:flex; gap:8px; padding:10px; border-top:1px solid #e5e7eb; }
     textarea { flex:1; resize:none; border:1px solid #d1d5db; border-radius:10px; padding:9px; outline:none; }
     button { border:0; border-radius:10px; background:#1677ff; color:#fff; padding:0 14px; cursor:pointer; }
@@ -26,44 +27,72 @@
     <footer class="ft"><textarea id="input" rows="2" placeholder="输入问题..."></textarea><button id="send">发送</button></footer>
   </div>
   <script>
-    let token = '';
-    let pageContext = { url: location.href, title: document.title };
-    let conversationId = localStorage.getItem('easp_embed_frame_conversation_id') || '';
-    const msgs = document.getElementById('msgs');
-    const input = document.getElementById('input');
-    const state = document.getElementById('state');
-    function append(role, text, replaceLast) {
-      let el = replaceLast ? msgs.lastElementChild : null;
-      if (!el || !el.classList.contains(role)) {
-        el = document.createElement('div'); el.className = 'msg ' + role; msgs.appendChild(el);
-      }
-      el.textContent = text; msgs.scrollTop = msgs.scrollHeight;
+  let token = '';
+  let assistantName = 'EASP AI 助手';
+  let pageContext = { url: location.href, title: document.title };
+  let conversationId = localStorage.getItem('easp_embed_frame_conversation_id') || '';
+  const msgs = document.getElementById('msgs');
+  const input = document.getElementById('input');
+  const state = document.getElementById('state');
+  function escapeHtml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+  function append(role, text, replaceLast) {
+    let el = replaceLast ? msgs.lastElementChild : null;
+    if (!el || !el.classList.contains(role)) {
+      el = document.createElement('div'); el.className = 'msg ' + role; msgs.appendChild(el);
     }
-    async function readSSE(res, onText, onConversation) {
-      const reader = res.body && res.body.getReader(); if (!reader) return;
-      const decoder = new TextDecoder(); let buffer = '';
-      while (true) {
-        const r = await reader.read(); if (r.done) break;
-        buffer += decoder.decode(r.value, { stream: true });
-        const events = buffer.split('\n\n'); buffer = events.pop() || '';
-        for (const event of events) {
-          const line = event.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
-          try { const data = JSON.parse(line.slice(5).trim()); if (data.conversation_id) onConversation(data.conversation_id); if (data.content) onText(data.content); if (data.delta) onText(data.delta); } catch(e) {}
-        }
+    el.textContent = text; msgs.scrollTop = msgs.scrollHeight;
+  }
+  function appendStep(step) {
+    const el = document.createElement('div');
+    el.className = 'step step-' + step.status;
+    el.innerHTML = '<div class="step-title"><span class="step-dot ' + step.status + '"></span><span>' + step.title + '</span></div>' + (step.result ? '<div class="step-result">' + escapeHtml(step.result) + '</div>' : '');
+    msgs.appendChild(el);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+  async function readSSE(res, onText, onConversation, onStep) {
+    const reader = res.body && res.body.getReader(); if (!reader) return;
+    const decoder = new TextDecoder(); let buffer = '';
+    while (true) {
+      const r = await reader.read(); if (r.done) break;
+      buffer += decoder.decode(r.value, { stream: true });
+      const events = buffer.split('\n\n'); buffer = events.pop() || '';
+      for (const event of events) {
+        const eventTypeLine = event.split('\n').find(l => l.startsWith('event:'));
+        const line = event.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+        try {
+          const data = JSON.parse(line.slice(5).trim());
+          if (data.conversation_id) onConversation(data.conversation_id);
+          if (data.content) onText(data.content); if (data.delta) onText(data.delta);
+          if (eventTypeLine) {
+            const eventType = eventTypeLine.slice(6).trim();
+            if (eventType === 'step' && onStep && data.step && data.title) {
+              onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
+            }
+          }
+        } catch(e) {}
       }
     }
+  }
     async function send() {
       const text = input.value.trim(); if (!text) return;
       if (!token) { append('assistant', '未收到 easp-api-token，无法发送。'); return; }
       input.value = ''; append('user', text);
       let answer = ''; append('assistant', '', false);
-      const res = await fetch('/embed/v1/assistant/chat', { method:'POST', headers:{ 'Content-Type':'application/json', 'easp-api-token': token }, body: JSON.stringify({ conversation_id: conversationId || undefined, messages:[{ role:'user', content:text }], page_context: pageContext }) });
+      const res = await fetch('/embed/v1/assistant/chat', { method:'POST', headers:{ 'Content-Type':'application/json', 'easp-api-token': token }, body: JSON.stringify({
+        session_id: conversationId || undefined,
+        message: text,
+        assistant_name: assistantName,
+        page_context: pageContext,
+        execution_mode: 'normal'
+      }) });
       if (!res.ok) { append('assistant', '请求失败：' + await res.text(), true); return; }
-      await readSSE(res, chunk => { answer += chunk; append('assistant', answer, true); }, id => { conversationId = id; localStorage.setItem('easp_embed_frame_conversation_id', id); });
+      await readSSE(res, chunk => { answer += chunk; append('assistant', answer, true); }, id => { conversationId = id; localStorage.setItem('easp_embed_frame_conversation_id', id); }, appendStep);
     }
     window.addEventListener('message', (event) => {
       const data = event.data || {};
-      if (data.type === 'EASP_ASSISTANT_TOKEN') { token = data.token || ''; pageContext = data.context || pageContext; state.textContent = token ? '已连接' : '无 Token'; }
+      if (data.type === 'EASP_ASSISTANT_TOKEN') { token = data.token || ''; pageContext = data.context || pageContext; if (data.assistantName) assistantName = data.assistantName; document.querySelector('.hd span').textContent = assistantName; state.textContent = token ? '已连接' : '无 Token'; }
       if (data.type === 'EASP_ASSISTANT_CONTEXT_UPDATE') pageContext = data.context || pageContext;
       if (data.type === 'EASP_ASSISTANT_LOGOUT') { token = ''; state.textContent = '已退出'; }
     });

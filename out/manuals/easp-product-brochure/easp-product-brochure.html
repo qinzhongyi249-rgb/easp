@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>EASP 产品推广手册</title>
+<style>
+@page { size: A4; margin: 14mm; }
+* { box-sizing: border-box; }
+body { margin:0; font-family:"Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif; color:#111827; background:#fff; line-height:1.58; }
+.cover { min-height: 267mm; margin:-14mm; padding:28mm 22mm; color:#fff; background: radial-gradient(circle at 78% 18%, #38bdf8 0, transparent 25%), linear-gradient(135deg,#0f172a 0%,#1e2761 48%,#028090 100%); display:flex; flex-direction:column; justify-content:center; }
+.kicker { color:#a7f3d0; font-size:13px; letter-spacing:2px; font-weight:700; }
+h1 { font-size:40px; margin:12px 0; line-height:1.15; }
+.subtitle { font-size:17px; max-width:680px; color:#e5e7eb; }
+.cover-grid { margin-top:32px; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.cover-card { border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); border-radius:14px; padding:13px; min-height:78px; }
+.cover-card b { display:block; font-size:15px; margin-bottom:6px; }
+.cover-card span { color:#dbeafe; font-size:11px; }
+section { page-break-before: always; }
+section:first-of-type { page-break-before: auto; }
+h2 { margin:0 0 12px; font-size:24px; color:#0f172a; }
+h3 { margin:18px 0 8px; color:#1e2761; font-size:17px; }
+p { margin:7px 0; }
+.lead { font-size:15px; color:#374151; }
+.grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin:12px 0; }
+.grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:12px 0; }
+.card { border:1px solid #e5e7eb; border-radius:14px; padding:14px; background:#f8fafc; page-break-inside: avoid; }
+.card h3 { margin-top:0; }
+.badge { display:inline-block; padding:4px 9px; border-radius:999px; background:#dbeafe; color:#1e3a8a; font-size:11px; font-weight:700; }
+table { width:100%; border-collapse:collapse; margin:12px 0; page-break-inside: avoid; font-size:12px; }
+th { background:#0f172a; color:white; text-align:left; }
+th, td { border:1px solid #e5e7eb; padding:8px; vertical-align:top; }
+.arch { border-radius:18px; padding:18px; background:#0f172a; color:#e5e7eb; margin:14px 0; page-break-inside: avoid; }
+.arch .row { display:flex; gap:10px; margin:10px 0; align-items:stretch; }
+.arch .box { flex:1; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.08); border-radius:12px; padding:10px; text-align:center; font-size:12px; }
+.arch .core { background:linear-gradient(135deg,#1e2761,#028090); border-color:#38bdf8; }
+.steps { counter-reset: step; }
+.step { position:relative; padding-left:42px; margin:10px 0; min-height:34px; }
+.step:before { counter-increment:step; content:counter(step); position:absolute; left:0; top:0; width:28px; height:28px; border-radius:50%; background:#028090; color:white; display:flex; align-items:center; justify-content:center; font-weight:700; }
+.footer { color:#6b7280; font-size:10px; margin-top:18px; border-top:1px solid #e5e7eb; padding-top:8px; }
+ul { padding-left:19px; }
+li { margin:5px 0; }
+.quote { border-left:5px solid #028090; padding:10px 14px; background:#ecfeff; color:#164e63; border-radius:0 12px 12px 0; }
+</style>
+</head>
+<body>
+<div class="cover">
+  <div class="kicker">ENTERPRISE AI SERVICE PLATFORM</div>
+  <h1>EASP 产品推广手册</h1>
+  <div class="subtitle">企业级 API-to-MCP 智能服务平台：把企业已有 API 安全、可控、可运营地转化为 AI Agent 可调用能力。</div>
+  <div class="cover-grid">
+    <div class="cover-card"><b>API-to-MCP</b><span>OpenAPI 导入，快速生成 MCP 工具</span></div>
+    <div class="cover-card"><b>企业治理</b><span>多租户、SSO、RBAC/ABAC、审计</span></div>
+    <div class="cover-card"><b>Skill 引擎</b><span>业务流程可编排、可执行、可追踪</span></div>
+    <div class="cover-card"><b>记忆系统</b><span>长期上下文、混合检索、治理审计</span></div>
+  </div>
+</div>
+
+<section><h2>1. 产品定位</h2>
+<p class="lead">EASP 是面向 B2B SaaS 和企业内部 AI 化建设的智能服务平台。它位于企业 API、模型服务与业务用户之间，承担统一接入、权限治理、工具编排、记忆管理与审计运营职责。</p>
+<div class="quote">让企业 API 成为 AI Agent 可安全调用、可治理运营、可持续扩展的生产力。</div>
+<div class="grid3">
+<div class="card"><span class="badge">接入</span><h3>把 API 变成 MCP 工具</h3><p>通过连接器与 OpenAPI 导入，将企业已有服务转为标准 MCP 工具。</p></div>
+<div class="card"><span class="badge">治理</span><h3>权限与审计闭环</h3><p>多租户、SSO、角色权限、API Key 与审计日志，降低越权与黑盒调用风险。</p></div>
+<div class="card"><span class="badge">运营</span><h3>模型、Skill、记忆一体化</h3><p>支持多模型配置、Skill 编排、长期记忆和用量分析，适配 SaaS 商业化。</p></div>
+</div></section>
+
+<section><h2>2. 企业 AI 落地痛点</h2>
+<div class="grid">
+<div class="card"><h3>系统多、接口散</h3><p>CRM、ERP、OA、客服、数据平台等接口分散，Agent 难以统一调用。</p></div>
+<div class="card"><h3>权限不可控</h3><p>模型能调用什么、谁能用什么、是否越权，需要企业级策略和后端判定。</p></div>
+<div class="card"><h3>集成成本高</h3><p>每个系统都要重复处理工具定义、鉴权、参数映射、错误处理和监控。</p></div>
+<div class="card"><h3>运营不可见</h3><p>工具调用、Token 消耗、失败原因、责任主体缺少统一追踪。</p></div>
+</div></section>
+
+<section><h2>3. 解决方案架构</h2>
+<div class="arch">
+  <div class="row"><div class="box">业务用户</div><div class="box">AI 助手</div><div class="box">外部 Agent</div></div>
+  <div class="row"><div class="box core">EASP 企业级智能服务平台<br/>认证｜权限｜API-to-MCP｜Skill｜记忆｜模型｜审计</div></div>
+  <div class="row"><div class="box">CRM</div><div class="box">ERP</div><div class="box">OA</div><div class="box">数据库</div><div class="box">第三方 API</div></div>
+</div>
+<table><tr><th>层级</th><th>能力</th><th>价值</th></tr>
+<tr><td>接入层</td><td>连接器、OpenAPI、MCP SSE/HTTP</td><td>统一企业 API 调用入口</td></tr>
+<tr><td>治理层</td><td>多租户、SSO、RBAC/ABAC、API Key</td><td>企业级安全边界</td></tr>
+<tr><td>智能层</td><td>AI 助手、Skill、记忆、模型配置</td><td>从工具调用走向业务自动化</td></tr>
+<tr><td>运营层</td><td>审计日志、用量统计、执行追踪</td><td>可监控、可计费、可优化</td></tr></table>
+</section>
+
+<section><h2>4. 核心能力矩阵</h2>
+<div class="grid">
+<div class="card"><h3>多租户与 SSO</h3><ul><li>租户隔离、到期与用户上限</li><li>标准登录与 SSO 自动回退</li><li>企业身份体系扩展预留</li></ul></div>
+<div class="card"><h3>角色权限</h3><ul><li>系统级/租户级角色</li><li>功能菜单与工具权限</li><li>后端统一决策，前端简洁展示</li></ul></div>
+<div class="card"><h3>API-to-MCP 网关</h3><ul><li>OpenAPI v2/v3 导入</li><li>自动生成 MCP 工具</li><li>参数映射与响应转换</li></ul></div>
+<div class="card"><h3>Skill 引擎</h3><ul><li>Schema 驱动执行表单</li><li>步骤执行与结果追踪</li><li>沉淀标准业务流程</li></ul></div>
+<div class="card"><h3>记忆系统</h3><ul><li>记忆池与长期记忆</li><li>去重、敏感过滤、审计</li><li>混合检索与召回解释</li></ul></div>
+<div class="card"><h3>模型与运营</h3><ul><li>多供应商、多模型</li><li>禁止静默错误 fallback</li><li>用量与审计分析</li></ul></div>
+</div></section>
+
+<section><h2>5. 典型应用场景</h2>
+<table><tr><th>场景</th><th>适用对象</th><th>EASP 价值</th></tr>
+<tr><td>企业内部 AI 助手</td><td>IT、行政、业务部门</td><td>按角色开放可调用工具，统一接入内部系统。</td></tr>
+<tr><td>客服/售后 Agent</td><td>客服中心、售后团队</td><td>自动查询订单、工单、知识库并生成处理建议。</td></tr>
+<tr><td>销售运营助手</td><td>销售、运营、管理层</td><td>查询客户、线索、合同、回款等数据，辅助决策。</td></tr>
+<tr><td>IT 运维自动化</td><td>运维、研发效能团队</td><td>将监控、发布、工单、资产接口封装为受控工具。</td></tr>
+<tr><td>SaaS 平台 AI 化</td><td>B2B SaaS 厂商</td><td>提供租户级 AI 能力开放、权限、用量和商业化基础。</td></tr>
+</table></section>
+
+<section><h2>6. 差异化优势</h2>
+<div class="grid">
+<div class="card"><h3>不是单一聊天机器人</h3><p>重点不是“会回答”，而是让 AI 安全调用企业业务能力。</p></div>
+<div class="card"><h3>不是普通 API 网关</h3><p>面向 Agent 调用，内置 MCP、Skill、记忆和模型服务能力。</p></div>
+<div class="card"><h3>核心策略在后端</h3><p>登录、权限、模型、记忆治理由后端统一决策，降低硬编码风险。</p></div>
+<div class="card"><h3>天然面向 B2B SaaS</h3><p>租户、到期、用户上限、API Key、用量分析支持商业化运营。</p></div>
+</div></section>
+
+<section><h2>7. 实施路径</h2>
+<div class="steps">
+<div class="step"><b>需求梳理：</b>确定首批接入系统、用户角色与高价值 Agent 场景。</div>
+<div class="step"><b>接口接入：</b>配置连接器，导入 OpenAPI，生成 MCP 工具。</div>
+<div class="step"><b>权限配置：</b>创建角色，配置功能菜单和工具调用边界。</div>
+<div class="step"><b>模型配置：</b>接入模型供应商，设置默认模型与可用范围。</div>
+<div class="step"><b>Skill 编排：</b>把高频业务流程沉淀为可复用 Skill。</div>
+<div class="step"><b>试点运营：</b>通过审计、用量与反馈优化工具边界和体验。</div>
+</div></section>
+
+<section><h2>8. 商业化适配</h2>
+<div class="grid3">
+<div class="card"><h3>租户套餐</h3><p>支持按租户开通、到期控制、用户上限设计套餐。</p></div>
+<div class="card"><h3>能力计量</h3><p>可围绕工具数量、模型用量、Skill 执行次数、API Key 调用做计费。</p></div>
+<div class="card"><h3>交付扩展</h3><p>支持私有化、专属连接器、专属模型供应商和企业定制流程。</p></div>
+</div>
+<div class="footer">注：具体价格、客户案例与 ROI 数据需结合实际商业策略补充。</div></section>
+
+<section><h2>9. 下一步建议</h2>
+<ul>
+<li>选择 1-2 个高价值业务流程作为试点，例如客服工单自动处理或销售客户查询助手。</li>
+<li>接入首批 3-5 个核心 API，并配置租户角色与工具权限。</li>
+<li>使用审计与用量数据评估上线效果。</li>
+<li>逐步将高频操作沉淀为 Skill，把经验沉淀为可治理记忆。</li>
+</ul>
+<div class="quote">EASP：让企业 API 成为 AI Agent 可安全调用、可治理运营、可持续扩展的生产力。</div>
+</section>
+</body>
+</html>

@@ -4,6 +4,7 @@ export interface Connector {
   id: string;
   tenant_id: string;
   name: string;
+  description?: string;
   type: string;
   base_url: string;
   transport_type?: 'sse' | 'streamable_http';

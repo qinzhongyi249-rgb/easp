@@ -1,108 +1,166 @@
 <!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EASP AI助手接入手册</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:980px;margin:32px auto;padding:0 20px;line-height:1.7;color:#111827}pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}blockquote{border-left:4px solid #3b82f6;padding-left:12px;color:#475569;background:#f8fafc}</style></head>
-<body><pre># EASP AI助手接入手册
-
-&gt; 本文面向第三方业务系统开发者，说明如何把 EASP AI 助手嵌入到 H5/PC 页面。
-&gt; 管理后台「AI 助手」页弹窗会按当前租户动态生成 JS SDK、iframe、token exchange 代码片段。
-
-## 1. 接入流程
-
-1. EASP 管理后台创建「嵌入接入应用」，保存一次性展示的 `App Secret`。
-2. 业务系统后端保存 `app_id` / `app_secret`。
-3. 先通过「用户接入手册」的 `/api/v1/embed/users/sync` 异步/初始化同步外部用户。
-4. 业务系统后端为当前登录用户向 EASP 换取 `easp-api-token`；如果助手需要代当前用户调用业务系统 API，同时传入当前业务用户的 `external_access_token`。
-5. 业务系统前端通过 JS SDK 或 iframe 嵌入助手，只接收业务后端返回的 `easp-api-token`。
-6. 助手接口使用 `easp-api-token`，真实权限仍由 EASP 用户/角色/工具/Skill/MCP 体系实时判断。
-
-## 2. 前置条件：外部用户已同步
-
-`/api/v1/embed/token/exchange` 不默认自动创建用户。当前 `external_user_id` 必须已经通过 `/api/v1/embed/users/sync` 同步，或已经存在有效的外部用户绑定关系。
-
-## 3. 服务端换 token
-
-```http
-POST /api/v1/embed/token/exchange
+<html>
+<head>
+<meta charset="utf-8">
+<title>EASP 接入文档</title>
+<style>
+body{
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-width: 980px;
+  margin: 40px auto;
+  padding: 0 24px;
+  line-height: 1.7;
+  color: #172033;
+}
+pre{
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 16px;
+  border-radius: 8px;
+  overflow: auto;
+}
+code{
+  background: #f1f5f9;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+pre code{
+  background: transparent;
+  padding: 0;
+}
+table{
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+td, th{
+  border: 1px solid #d9e2ec;
+  padding: 8px;
+  text-align: left;
+}
+blockquote{
+  border-left: 4px solid #1677ff;
+  background: #f5faff;
+  padding: 8px 16px;
+  margin: 16px 0;
+}
+h1{
+  font-size: 2em;
+  margin-top: 0.67em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+h2{
+  font-size: 1.5em;
+  margin-top: 1em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+h3{
+  font-size: 1.25em;
+  margin-top: 1em;
+}
+</style>
+</head>
+<body>
+<h1 id="easp-ai助手接入手册">EASP AI助手接入手册</h1>
+<blockquote>
+<p>本文面向第三方业务系统开发者，说明如何把 EASP AI 助手嵌入到 H5/PC
+页面。 管理后台「AI 助手」页弹窗会按当前租户动态生成 JS
+SDK、iframe、token exchange 代码片段。</p>
+</blockquote>
+<h2 id="接入流程">1. 接入流程</h2>
+<ol type="1">
+<li>EASP 管理后台创建「嵌入接入应用」，保存一次性展示的
+<code>App Secret</code>。</li>
+<li>业务系统后端保存 <code>app_id</code> /
+<code>app_secret</code>。</li>
+<li>先通过「用户接入手册」的 <code>/api/v1/embed/users/sync</code>
+异步/初始化同步外部用户。</li>
+<li>业务系统后端为当前登录用户向 EASP 换取
+<code>easp-api-token</code>；如果助手需要代当前用户调用业务系统
+API，同时传入当前业务用户的 <code>external_access_token</code>。</li>
+<li>业务系统前端通过 JS SDK 或 iframe 嵌入助手，只接收业务后端返回的
+<code>easp-api-token</code>。</li>
+<li>助手接口使用 <code>easp-api-token</code>，真实权限仍由 EASP
+用户/角色/工具/Skill/MCP 体系实时判断。</li>
+</ol>
+<h2 id="前置条件外部用户已同步">2. 前置条件：外部用户已同步</h2>
+<p><code>/api/v1/embed/token/exchange</code> 不默认自动创建用户。当前
+<code>external_user_id</code> 必须已经通过
+<code>/api/v1/embed/users/sync</code>
+同步，或已经存在有效的外部用户绑定关系。</p>
+<h2 id="服务端换-token">3. 服务端换 token</h2>
+<pre class="http"><code>POST /api/v1/embed/token/exchange
 X-EASP-App-Id: &lt;app_id&gt;
 X-EASP-Timestamp: &lt;unix_seconds&gt;
 X-EASP-Nonce: &lt;random_nonce&gt;
 X-EASP-Signature: &lt;hmac_sha256_signature&gt;
-Content-Type: application/json
-```
-
-请求体：
-
-```json
-{
-  &quot;tenant_id&quot;: &quot;tenant_xxx&quot;,
-  &quot;external_system&quot;: &quot;crm&quot;,
-  &quot;external_user_id&quot;: &quot;u_10001&quot;,
-  &quot;external_access_token&quot;: &quot;&lt;current_business_user_token&gt;&quot;,
-  &quot;external_token_expires_at&quot;: 1790000000
-}
-```
-
-签名规则：
-
-```text
-secret_hash = SHA256(app_secret)
+Content-Type: application/json</code></pre>
+<p>请求体：</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;tenant_id&quot;</span><span class="fu">:</span> <span class="st">&quot;tenant_xxx&quot;</span><span class="fu">,</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_system&quot;</span><span class="fu">:</span> <span class="st">&quot;crm&quot;</span><span class="fu">,</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_user_id&quot;</span><span class="fu">:</span> <span class="st">&quot;u_10001&quot;</span><span class="fu">,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_access_token&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;current_business_user_token&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;external_token_expires_at&quot;</span><span class="fu">:</span> <span class="dv">1790000000</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>签名规则：</p>
+<pre class="text"><code>secret_hash = SHA256(app_secret)
 payload = app_id=...&amp;timestamp=...&amp;nonce=...&amp;external_system=...&amp;external_user_id=...&amp;tenant_id=...
-signature = HMAC-SHA256(secret_hash, payload)
-```
-
-&gt; `App Secret` 只能放在业务系统后端，不能出现在 H5、PC 前端、JS SDK 参数或 iframe URL 中。
-&gt;
-&gt; `external_access_token` 是当前业务系统登录用户的业务 token，仅在业务系统后端换取 `easp-api-token` 时传给 EASP。EASP 不会把它返回给浏览器，也不会把明文写入 `easp-api-token`；`easp-api-token` 只携带不可反推的引用。需要代用户调用业务系统 API 的连接器，应在 EASP 连接器配置中使用 `credential_mode=user_token`，并由 `user_token_header` / `user_token_prefix` 控制注入方式。
-
-## 4. JS SDK 嵌入
-
-```html
-&lt;script src=&quot;https://easp.example.com/embed/assistant.js&quot;&gt;&lt;/script&gt;
-&lt;script&gt;
-  EASPAssistant.init({
-    baseUrl: &#x27;https://easp.example.com&#x27;,
-    tenantId: &#x27;tenant_xxx&#x27;,
-    tokenProvider: async () =&gt; {
-      const res = await fetch(&#x27;/api/easp-assistant-token&#x27;, { method: &#x27;POST&#x27; });
-      const data = await res.json();
-      return data.easp_api_token;
-    },
-    user: {
-      external_system: &#x27;crm&#x27;,
-      external_user_id: &#x27;u_10001&#x27;,
-      display_name: &#x27;张三&#x27;
-    }
-  });
-&lt;/script&gt;
-```
-
-## 5. iframe 嵌入
-
-```html
-&lt;iframe
-  id=&quot;easp-assistant&quot;
-  src=&quot;https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx&quot;
-  style=&quot;position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;&quot;
-&gt;&lt;/iframe&gt;
-```
-
-## 6. 嵌入式助手接口
-
-```http
-POST /embed/v1/assistant/chat
+signature = HMAC-SHA256(secret_hash, payload)</code></pre>
+<blockquote>
+<p><code>App Secret</code> 只能放在业务系统后端，不能出现在 H5、PC
+前端、JS SDK 参数或 iframe URL 中。</p>
+<p><code>external_access_token</code> 是当前业务系统登录用户的业务
+token，仅在业务系统后端换取 <code>easp-api-token</code> 时传给
+EASP。EASP 不会把它返回给浏览器，也不会把明文写入
+<code>easp-api-token</code>；<code>easp-api-token</code>
+只携带不可反推的引用。需要代用户调用业务系统 API 的连接器，应在 EASP
+连接器配置中使用 <code>credential_mode=user_token</code>，并由
+<code>user_token_header</code> / <code>user_token_prefix</code>
+控制注入方式。</p>
+</blockquote>
+<h2 id="js-sdk-嵌入">4. JS SDK 嵌入</h2>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode html"><code class="sourceCode html"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">script</span> <span class="er">src</span><span class="ot">=</span><span class="st">&quot;https://easp.example.com/embed/assistant.js&quot;</span><span class="dt">&gt;&lt;/</span><span class="kw">script</span><span class="dt">&gt;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">script</span><span class="dt">&gt;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  EASPAssistant<span class="op">.</span><span class="fu">init</span>({</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">baseUrl</span><span class="op">:</span> <span class="st">&#39;https://easp.example.com&#39;</span><span class="op">,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">tenantId</span><span class="op">:</span> <span class="st">&#39;tenant_xxx&#39;</span><span class="op">,</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">tokenProvider</span><span class="op">:</span> <span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> res <span class="op">=</span> <span class="cf">await</span> <span class="fu">fetch</span>(<span class="st">&#39;/api/easp-assistant-token&#39;</span><span class="op">,</span> { <span class="dt">method</span><span class="op">:</span> <span class="st">&#39;POST&#39;</span> })<span class="op">;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      <span class="kw">const</span> data <span class="op">=</span> <span class="cf">await</span> res<span class="op">.</span><span class="fu">json</span>()<span class="op">;</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> data<span class="op">.</span><span class="at">easp_api_token</span><span class="op">;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">user</span><span class="op">:</span> {</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>      <span class="dt">external_system</span><span class="op">:</span> <span class="st">&#39;crm&#39;</span><span class="op">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>      <span class="dt">external_user_id</span><span class="op">:</span> <span class="st">&#39;u_10001&#39;</span><span class="op">,</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">display_name</span><span class="op">:</span> <span class="st">&#39;张三&#39;</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;/</span><span class="kw">script</span><span class="dt">&gt;</span></span></code></pre></div>
+<h2 id="iframe-嵌入">5. iframe 嵌入</h2>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode html"><code class="sourceCode html"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">&lt;</span><span class="kw">iframe</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ot">  id=</span><span class="st">&quot;easp-assistant&quot;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ot">  src=</span><span class="st">&quot;https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx&quot;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ot">  style=</span><span class="st">&quot;position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;&quot;</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">&gt;&lt;/</span><span class="kw">iframe</span><span class="dt">&gt;</span></span></code></pre></div>
+<h2 id="嵌入式助手接口">6. 嵌入式助手接口</h2>
+<pre class="http"><code>POST /embed/v1/assistant/chat
 GET  /embed/v1/assistant/conversations
-GET  /embed/v1/assistant/conversations/{conversation_id}/messages
-```
-
-这些接口只接受 `easp-api-token`，不接受后台管理 JWT。
-
-## 7. 自测清单
-
-- `/embed/assistant.js` 可访问。
-- `/embed/assistant-frame.html` 可访问。
-- 外部用户已通过 `/api/v1/embed/users/sync` 同步。
-- token exchange 返回 `easp-api-token`。
-- 浏览器 Network 中助手聊天接口返回 200。
-- 审计日志能看到外部系统、外部用户、app_id。
-</pre></body></html>
+GET  /embed/v1/assistant/conversations/{conversation_id}/messages</code></pre>
+<p>这些接口只接受 <code>easp-api-token</code>，不接受后台管理 JWT。</p>
+<h2 id="自测清单">7. 自测清单</h2>
+<ul>
+<li><code>/embed/assistant.js</code> 可访问。</li>
+<li><code>/embed/assistant-frame.html</code> 可访问。</li>
+<li>外部用户已通过 <code>/api/v1/embed/users/sync</code> 同步。</li>
+<li>token exchange 返回 <code>easp-api-token</code>。</li>
+<li>浏览器 Network 中助手聊天接口返回 200。</li>
+<li>审计日志能看到外部系统、外部用户、app_id。</li>
+</ul>
+</body>
+</html>

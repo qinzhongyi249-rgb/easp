@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Table, Button, Modal, Form, Input, Space, Typography, Popconfirm, App, Tag, Dropdown, Select, Divider, Switch, Alert, Card, Statistic, Steps, Empty, Drawer, Descriptions } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined, CloudServerOutlined, CodeOutlined, SafetyCertificateOutlined, ToolOutlined, LockOutlined, EyeOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined, MoreOutlined, MinusCircleOutlined, PlusCircleOutlined, CloudServerOutlined, CodeOutlined, SafetyCertificateOutlined, ToolOutlined, LockOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import type { Connector } from '../api/connector';
 import { connectorApi } from '../api/connector';
@@ -19,6 +19,7 @@ const Connectors: React.FC = () => {
   const { message } = App.useApp();
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchText, setSearchText] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Connector | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -29,6 +30,17 @@ const Connectors: React.FC = () => {
   // 认证/凭据类型联动
   const authType = Form.useWatch('auth_type', form);
   const credentialMode = Form.useWatch('credential_mode', form);
+
+  const filteredConnectors = useMemo(() => {
+    if (!searchText) return connectors;
+    const lower = searchText.toLowerCase();
+    return connectors.filter(c => 
+      (c.name?.toLowerCase().includes(lower)) ||
+      (c.base_url?.toLowerCase().includes(lower)) ||
+      (c.description?.toLowerCase().includes(lower)) ||
+      (c.id?.toLowerCase().includes(lower))
+    );
+  }, [connectors, searchText]);
 
   const load = async () => {
     if (!currentTenant) return;
@@ -143,13 +155,39 @@ const Connectors: React.FC = () => {
     } catch (err: unknown) { const e = err as { response?: { data?: { error?: string } } }; message.error(e.response?.data?.error || '操作失败'); }
   };
 
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [deletingConnector, setDeletingConnector] = useState<Connector | null>(null);
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingConnector) return;
+    setConfirmModalOpen(false);
+    try { 
+      await connectorApi.delete(currentTenant, deletingConnector.id); 
+      message.success('删除成功'); 
+      load(); 
+    }
+    catch { message.error('删除失败'); }
+  };
+
   const onDelete = async (connector: Connector) => {
     if (isLockedBuiltinConnector(connector)) {
       message.warning('内置锁定接入源不可删除');
       return;
     }
-    try { await connectorApi.delete(currentTenant, connector.id); message.success('删除成功'); load(); }
-    catch { message.error('删除失败'); }
+    const toolCount = connector.tools_count || 0;
+    if (toolCount > 0) {
+      // 有关联 MCP 工具，弹出确认 modal 提醒
+      setDeletingConnector(connector);
+      setConfirmModalOpen(true);
+    } else {
+      // 没有关联工具，直接删除
+      try { 
+        await connectorApi.delete(currentTenant, connector.id); 
+        message.success('删除成功'); 
+        load(); 
+      }
+      catch { message.error('删除失败'); }
+    }
   };
 
   const credentialModeLabel = (mode?: string) => {
@@ -247,6 +285,14 @@ const Connectors: React.FC = () => {
           <Text type="secondary">把业务系统 API、OpenAPI 文档或 MCP Server 接入 EASP，再统一做权限、审计和助手调用。</Text>
         </div>
         <Space wrap>
+          <Input.Search
+            placeholder="搜索名称/URL/ID..."
+            allowClear
+            prefix={<SearchOutlined />}
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{ width: isMobile ? '100%' : 220 }}
+          />
           <Button icon={<ToolOutlined />} href="/mcp-tools">查看工具</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openConnectorWizard('mcp')}>新建接入</Button>
         </Space>
@@ -307,16 +353,16 @@ const Connectors: React.FC = () => {
         </Card>
 
         <Card title="接入源" extra={<Button icon={<PlusOutlined />} onClick={() => openConnectorWizard('mcp')}>新建接入源</Button>}>
-          {connectors.length === 0 ? <Empty description="暂无业务工具接入源，先选择上方接入方式创建" /> : (
+          {filteredConnectors.length === 0 ? <Empty description={searchText ? `未找到包含 "${searchText}" 的接入源` : '暂无业务工具接入源，先选择上方接入方式创建'} /> : (
             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-              {connectors.map(renderConnectorCard)}
+              {filteredConnectors.map(renderConnectorCard)}
             </div>
           )}
         </Card>
 
         <Card title="接入源明细">
           <Table
-            dataSource={connectors}
+            dataSource={filteredConnectors}
             columns={columns}
             rowKey="id"
             loading={loading}
@@ -493,6 +539,25 @@ const Connectors: React.FC = () => {
             </>
           )}
         </Form>
+      </Modal>
+      <Modal
+        title="确认删除连接器"
+        open={confirmModalOpen}
+        onCancel={() => setConfirmModalOpen(false)}
+        onOk={handleDeleteConfirm}
+        okType="danger"
+        okText="确认删除"
+        cancelText="取消"
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message={`该连接器已有 ${deletingConnector?.tools_count || 0} 个关联的 MCP 工具`}
+          description="删除连接器不会自动删除这些 MCP 工具，它们会变成 orphan 记录，无法正常使用。建议先在 MCP 工具页按连接器筛选后批量删除，再删除当前连接器。"
+        />
+        <div style={{ marginTop: 16 }}>
+          <Text type="secondary">你仍可以继续删除该连接器，但关联工具需要手动清理。</Text>
+        </div>
       </Modal>
     </div>
   );

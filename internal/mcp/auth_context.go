@@ -16,6 +16,12 @@ func WithUserSSOToken(ctx context.Context, token string) context.Context {
 	return context.WithValue(ctx, ssoTokenContextKey{}, token)
 }
 
+// WithManualUserToken is an alias for WithUserSSOToken, used when token is manually provided in test call.
+// Exported for handler to use when testing token透传 manually.
+func WithManualUserToken(ctx context.Context, token string) context.Context {
+	return WithUserSSOToken(ctx, token)
+}
+
 // UserSSOTokenFromContext reads the current login user's upstream SSO token from context.
 func UserSSOTokenFromContext(ctx context.Context) (string, bool) {
 	token, ok := ctx.Value(ssoTokenContextKey{}).(string)

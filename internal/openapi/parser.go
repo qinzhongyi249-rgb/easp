@@ -9,12 +9,14 @@ import (
 	"time"
 )
 
-// OpenAPISpec OpenAPI规范
+// OpenAPISpec OpenAPI规范 (兼容 OpenAPI 3.0 + Swagger 2.0)
 type OpenAPISpec struct {
-	OpenAPI string                 `json:"openapi"`
+	OpenAPI string                 `json:"openapi"`  // OpenAPI 3.0
+	Swagger string                 `json:"swagger"`  // Swagger 2.0 兼容
 	Info    Info                   `json:"info"`
 	Servers []Server               `json:"servers,omitempty"`
 	Paths   map[string]PathItem    `json:"paths"`
+	BasePath string                `json:"basePath,omitempty"` // Swagger 2.0 兼容
 	Components *Components         `json:"components,omitempty"`
 }
 
@@ -105,13 +107,65 @@ type MCPToolFromOpenAPI struct {
 	Path        string      `json:"path"`
 }
 
-// ParseOpenAPISpec 解析OpenAPI规范
-func ParseOpenAPISpec(data []byte) (*OpenAPISpec, error) {
+// 我们需要用 interface{} 先解析整个 paths，然后过滤掉非 object 项
+// 有些文档生成工具会在 paths 下插入 x-* 字段，值不是 PathItem，会导致解析失败
+type loosePaths map[string]interface{}
+
+func parseOpenAPISpec(data []byte) (*OpenAPISpec, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
 	var spec OpenAPISpec
 	if err := json.Unmarshal(data, &spec); err != nil {
-		return nil, fmt.Errorf("failed to parse OpenAPI spec: %w", err)
+		// 如果直接解析失败，尝试手动处理 paths，过滤掉非 object 项
+		// 重新解析
+		var spec2 struct {
+			OpenAPI string                 `json:"openapi"`
+			Swagger string                 `json:"swagger"`
+			Info    Info                   `json:"info"`
+			Servers []Server               `json:"servers,omitempty"`
+			Paths   loosePaths             `json:"paths"`
+			BasePath string               `json:"basePath,omitempty"`
+			Components *Components         `json:"components,omitempty"`
+		}
+		if err2 := json.Unmarshal(data, &spec2); err2 != nil {
+			return nil, err // still fail, return original error
+		}
+		spec.OpenAPI = spec2.OpenAPI
+		spec.Swagger = spec2.Swagger
+		spec.Info = spec2.Info
+		spec.Servers = spec2.Servers
+		spec.BasePath = spec2.BasePath
+		spec.Components = spec2.Components
+		spec.Paths = make(map[string]PathItem)
+
+		for path, value := range spec2.Paths {
+			if path == "" || !IsObject(value) {
+				continue // skip non-object entries (like x-* extensions with scalar values)
+			}
+			// marshal again and parse into PathItem
+			pathItemBytes, _ := json.Marshal(value)
+			var pathItem PathItem
+			if json.Unmarshal(pathItemBytes, &pathItem) == nil {
+				spec.Paths[path] = pathItem
+			}
+			// if fails to parse PathItem, skip it (ignore broken entries)
+		}
 	}
 	return &spec, nil
+}
+
+// IsObject checks if value is a JSON object
+func IsObject(v interface{}) bool {
+	_, ok := v.(map[string]interface{})
+	return ok
+}
+
+// ParseOpenAPISpec 解析OpenAPI规范
+func ParseOpenAPISpec(data []byte) (*OpenAPISpec, error) {
+	return parseOpenAPISpec(data)
 }
 
 // FetchOpenAPISpec 从URL获取OpenAPI规范
@@ -139,7 +193,14 @@ func FetchOpenAPISpec(url string) (*OpenAPISpec, error) {
 func ConvertToMCPTools(spec *OpenAPISpec) []MCPToolFromOpenAPI {
 	var tools []MCPToolFromOpenAPI
 
+	basePath := spec.BasePath // Swagger 2.0 basePath
+
 	for path, pathItem := range spec.Paths {
+		// Swagger 2.0: 拼接 basePath
+		if basePath != "" {
+			path = basePath + path
+		}
+
 		operations := map[string]*Operation{
 			"GET":    pathItem.Get,
 			"POST":   pathItem.Post,

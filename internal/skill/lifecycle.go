@@ -37,10 +37,12 @@ func NormalizeExecutionMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case ExecutionModeDryRun:
 		return ExecutionModeDryRun
-	case ExecutionModeProduction:
+	case ExecutionModeProduction, "normal": // "normal" 是别名，指向 production
 		return ExecutionModeProduction
 	case ExecutionModeSandbox, "":
-		return ExecutionModeSandbox
+		// 嵌入式场景默认需要真实执行，所以空字符串默认 production
+		// 历史：原来默认 sandbox，现在改为 production 符合实际使用场景
+		return ExecutionModeProduction
 	default:
 		return strings.ToLower(strings.TrimSpace(mode))
 	}

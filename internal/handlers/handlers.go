@@ -800,6 +800,12 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user", "details": err.Error()})
 		return
 	}
+	// 删除用户时级联清理外部用户绑定关系
+	// 因为外部绑定记录指向已删除用户，保留会导致脏数据显示
+	database.DB.Exec("DELETE FROM external_user_bindings WHERE user_id = ?", userID)
+	// 同时清理用户角色关系
+	database.DB.Exec("DELETE FROM user_roles WHERE user_id = ?", userID)
+
 	c.JSON(http.StatusOK, gin.H{"message": "User deleted successfully"})
 }
 
@@ -1020,6 +1026,11 @@ func (h *MCPToolHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 更新连接器工具数量
+	if tool.ConnectorID != "" {
+		database.DB.Exec("UPDATE connectors SET tools_count = (SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?), last_sync_at = NOW() WHERE id = ?", tool.ConnectorID, tool.ConnectorID)
+	}
+
 	c.JSON(http.StatusCreated, tool)
 }
 
@@ -1202,6 +1213,7 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 	req.TenantID = existing.TenantID
 	req.IsBuiltin = existing.IsBuiltin
 	req.Locked = existing.Locked
+	oldConnectorID := existing.ConnectorID
 	if req.ConnectorID == "" {
 		req.ConnectorID = existing.ConnectorID
 	}
@@ -1227,6 +1239,16 @@ func (h *MCPToolHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// 如果 connector_id 发生变化，更新新旧连接器的工具数量
+	if req.ConnectorID != oldConnectorID {
+		if oldConnectorID != "" {
+			database.DB.Exec("UPDATE connectors SET tools_count = (SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?), last_sync_at = NOW() WHERE id = ?", oldConnectorID, oldConnectorID)
+		}
+		if req.ConnectorID != "" {
+			database.DB.Exec("UPDATE connectors SET tools_count = (SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?), last_sync_at = NOW() WHERE id = ?", req.ConnectorID, req.ConnectorID)
+		}
+	}
+
 	c.JSON(http.StatusOK, req)
 }
 
@@ -1242,10 +1264,15 @@ func (h *MCPToolHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
+	connectorID := existing.ConnectorID
 	if err := h.repo.Delete(toolID); err != nil {
 		log.Printf("Failed to delete MCP tool: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete MCP tool", "details": err.Error()})
 		return
+	}
+	// 更新连接器工具数量
+	if connectorID != "" {
+		database.DB.Exec("UPDATE connectors SET tools_count = (SELECT COUNT(*) FROM mcp_tools WHERE connector_id = ?), last_sync_at = NOW() WHERE id = ?", connectorID, connectorID)
 	}
 	c.JSON(http.StatusNoContent, nil)
 }

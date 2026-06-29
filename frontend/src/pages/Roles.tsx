@@ -139,11 +139,25 @@ const Roles: React.FC = () => {
       }
       let allowedMCPTools: string[] = [];
       if (record.allowed_mcp_tools) {
-        try { allowedMCPTools = JSON.parse(record.allowed_mcp_tools); } catch { allowedMCPTools = []; }
+        try { 
+          const parsed = JSON.parse(record.allowed_mcp_tools);
+          // 过滤掉已经被删除的MCP工具ID
+          const existingIds = new Set(mcpTools.map(t => t.id));
+          allowedMCPTools = Array.isArray(parsed) ? parsed.filter(id => existingIds.has(id)) : [];
+        } catch { 
+          allowedMCPTools = []; 
+        }
       }
       let allowedSkills: string[] = [];
       if (record.allowed_skills) {
-        try { allowedSkills = JSON.parse(record.allowed_skills); } catch { allowedSkills = []; }
+        try { 
+          const parsed = JSON.parse(record.allowed_skills);
+          // 过滤掉已经被删除的技能ID
+          const existingIds = new Set(skills.map(s => s.id));
+          allowedSkills = Array.isArray(parsed) ? parsed.filter(id => existingIds.has(id)) : [];
+        } catch { 
+          allowedSkills = []; 
+        }
       }
       form.setFieldsValue({
         ...record,
