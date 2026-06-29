@@ -35,12 +35,8 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={null}>
       <Routes>
-        <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/admin/dashboard" replace /> : <Login />} />
-        <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/admin/dashboard" replace /> : <Login />} />
-        <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
-        <Route path="/admin" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-          <Route index element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="/" element={isAuthenticated ? <ProtectedRoute><MainLayout /></ProtectedRoute> : <Navigate to="/login" replace />}>
+          <Route index element={<Dashboard />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="tenants" element={<Tenants />} />
           <Route path="users" element={<Users />} />
@@ -56,7 +52,10 @@ const AppRoutes = () => {
           <Route path="assistant" element={<Assistant />} />
           <Route path="usage-analytics" element={<UsageAnalytics />} />
         </Route>
-        <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Suspense>
   );
