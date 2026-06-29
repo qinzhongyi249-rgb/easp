@@ -5,7 +5,6 @@ import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import MainLayout from './layouts/MainLayout';
 
-const Home = lazy(() => import('./pages/Home'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Tenants = lazy(() => import('./pages/Tenants'));
@@ -36,9 +35,9 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={null}>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
-        <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/admin/dashboard" replace /> : <Login />} />
+        <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/admin/dashboard" replace /> : <Login />} />
         <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
         <Route path="/admin" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/admin/dashboard" replace />} />
@@ -57,7 +56,7 @@ const AppRoutes = () => {
           <Route path="assistant" element={<Assistant />} />
           <Route path="usage-analytics" element={<UsageAnalytics />} />
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Routes>
     </Suspense>
   );
