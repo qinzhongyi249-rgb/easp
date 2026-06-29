@@ -58,7 +58,7 @@ signature = HMAC-SHA256(secret_hash, payload)
 ## 4. JS SDK 嵌入
 
 ```html
-<script src=\"https://easp.example.com/embed/assistant.js\"></script>
+<script src="https://easp.example.com/embed/assistant.js"></script>
 <script>
   EASPAssistant.init({
     baseUrl: 'https://easp.example.com',
@@ -68,7 +68,7 @@ signature = HMAC-SHA256(secret_hash, payload)
       const data = await res.json();
       return data.easp_api_token;
     },
-    executionMode: 'normal', // 可选：'normal' 真实调用工具 / 'sandbox' 只规划不执行
+    executionMode: 'normal', // 可选: 'normal' 真实调用工具 / 'sandbox' 只规划不执行
     user: {
       external_system: 'crm',
       external_user_id: 'u_10001',
