@@ -35,7 +35,9 @@ Content-Type: application/json
   "external_system": "crm",
   "external_user_id": "u_10001",
   "external_access_token": "<current_business_user_token>",
-  "external_token_expires_at": 1790000000
+  "external_token_expires_at": 1790000000,
+  "auto_create_user": true,
+  "default_role_ids": ["role-xxx"]
 }
 ```
 
@@ -50,6 +52,8 @@ signature = HMAC-SHA256(secret_hash, payload)
 > `App Secret` 只能放在业务系统后端，不能出现在 H5、PC 前端、JS SDK 参数或 iframe URL 中。
 >
 > `external_access_token` 是当前业务系统登录用户的业务 token，仅在业务系统后端换取 `easp-api-token` 时传给 EASP。EASP 不会把它返回给浏览器，也不会把明文写入 `easp-api-token`；`easp-api-token` 只携带不可反推的引用。需要代用户调用业务系统 API 的连接器，应在 EASP 连接器配置中使用 `credential_mode=user_token`，并由 `user_token_header` / `user_token_prefix` 控制注入方式。
+>
+> **auto_create_user**：开启后，如果未找到匹配的外部用户绑定，EASP 会自动创建 EASP 用户并绑定，不需要提前手动导入；`default_role_ids` 必须同时配置，分配默认租户角色。
 
 ## 4. JS SDK 嵌入
 
