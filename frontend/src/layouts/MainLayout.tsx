@@ -93,11 +93,11 @@ const MainLayout: React.FC = () => {
   };
 
   const menuItems = [
-    { key: '/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
-    ...(isAdmin ? [{ key: '/tenants', icon: <TeamOutlined />, label: '租户管理' }] : []),
+    { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '仪表盘' },
+    ...(isAdmin ? [{ key: '/admin/tenants', icon: <TeamOutlined />, label: '租户管理' }] : []),
     ...FEATURE_MENU_PERMISSIONS
       .filter(item => hasTool(item.value))
-      .map(item => ({ key: item.path, icon: menuIconMap[item.value], label: item.label })),
+      .map(item => ({ key: `/admin/${item.value}`, icon: menuIconMap[item.value], label: item.label })),
   ];
 
   const userMenuItems = [
