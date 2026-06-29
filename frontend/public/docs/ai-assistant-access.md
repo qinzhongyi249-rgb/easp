@@ -54,7 +54,7 @@ signature = HMAC-SHA256(secret_hash, payload)
 ## 4. JS SDK 嵌入
 
 ```html
-<script src="https://easp.example.com/embed/assistant.js"></script>
+<script src=\"https://easp.example.com/embed/assistant.js\"></script>
 <script>
   EASPAssistant.init({
     baseUrl: 'https://easp.example.com',
@@ -64,6 +64,7 @@ signature = HMAC-SHA256(secret_hash, payload)
       const data = await res.json();
       return data.easp_api_token;
     },
+    executionMode: 'normal', // 可选：'normal' 真实调用工具 / 'sandbox' 只规划不执行
     user: {
       external_system: 'crm',
       external_user_id: 'u_10001',
@@ -72,6 +73,16 @@ signature = HMAC-SHA256(secret_hash, payload)
   });
 </script>
 ```
+
+**JS SDK 配置参数：**
+
+| 参数 | 说明 | 是否必填 |
+|------|------|----------|
+| `baseUrl` | EASP 平台访问地址（不含结尾 `/`） | ✅ 必填 |
+| `tenantId` | 租户 ID | ✅ 必填 |
+| `tokenProvider` | 获取 `easp-api-token` 的异步函数 | ✅ 必填 |
+| `executionMode` | `normal`（真实执行工具）/ `sandbox`（只规划不执行） | 否，默认 `normal` |
+| `user` | 当前外部用户信息 `{ external_system, external_user_id, display_name }` | ✅ 必填 |
 
 ## 5. iframe 嵌入
 
@@ -90,6 +101,16 @@ POST /embed/v1/assistant/chat
 GET  /embed/v1/assistant/conversations
 GET  /embed/v1/assistant/conversations/{conversation_id}/messages
 ```
+
+**聊天请求体字段：**
+
+| 字段 | 说明 | 是否必填 |
+|------|------|----------|
+| `session_id` | 会话 ID，不传自动新建，用于历史上下文 | 否 |
+| `message` | 用户当前消息 | ✅ 必填 |
+| `assistant_name` | 自定义助手名称 | 否 |
+| `execution_mode` | `normal` 真实调用工具 / `sandbox` 只规划不执行 | 否，默认 `normal` |
+| `page_context` | 当前页面上下文对象，帮助 AI 理解问题 | 否 |
 
 这些接口只接受 `easp-api-token`，不接受后台管理 JWT。
 
