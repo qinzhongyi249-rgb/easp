@@ -80,6 +80,7 @@
       if (!token) { append('assistant', '未收到 easp-api-token，无法发送。'); return; }
       input.value = ''; append('user', text);
       let answer = ''; append('assistant', '', false);
+      console.log('[EASPAssistant iframe] sending chat request, token:', token ? `${token.substring(0, 20)}...` : 'empty');
       const res = await fetch('/embed/v1/assistant/chat', { method:'POST', headers:{ 'Content-Type':'application/json', 'easp-api-token': token }, body: JSON.stringify({
         session_id: conversationId || undefined,
         message: text,
@@ -87,11 +88,12 @@
         page_context: pageContext,
         execution_mode: 'normal'
       }) });
-      if (!res.ok) { append('assistant', '请求失败：' + await res.text(), true); return; }
-      await readSSE(res, chunk => { answer += chunk; append('assistant', answer, true); }, id => { conversationId = id; localStorage.setItem('easp_embed_frame_conversation_id', id); }, appendStep);
+      if (!res.ok) { const errTxt = await res.text(); console.error('[EASPAssistant iframe] request failed:', res.status, errTxt); append('assistant', '请求失败：' + errTxt, true); return; }
+      await readSSE(res, chunk => { answer += chunk; append('assistant', answer, true); }, id => { conversationId = id; localStorage.setItem('easp_embed_frame_conversation_id', id); console.log('[EASPAssistant iframe] new conversation:', id); }, appendStep);
     }
-    window.addEventListener('message', (event) => {
+  window.addEventListener('message', (event) => {
       const data = event.data || {};
+      console.log('[EASPAssistant iframe] received message:', data);
       if (data.type === 'EASP_ASSISTANT_TOKEN') { token = data.token || ''; pageContext = data.context || pageContext; if (data.assistantName) assistantName = data.assistantName; document.querySelector('.hd span').textContent = assistantName; state.textContent = token ? '已连接' : '无 Token'; }
       if (data.type === 'EASP_ASSISTANT_CONTEXT_UPDATE') pageContext = data.context || pageContext;
       if (data.type === 'EASP_ASSISTANT_LOGOUT') { token = ''; state.textContent = '已退出'; }

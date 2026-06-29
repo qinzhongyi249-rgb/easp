@@ -28,6 +28,7 @@
   }
   function init(options) {
     if (!options || !options.tokenProvider) throw new Error('EASPAssistant.init: tokenProvider is required');
+    console.log('[EASPAssistant] init with options:', options);
     var baseUrl = (options.baseUrl || '').replace(/\/$/, '');
     var pos = options.position === 'left-bottom' ? 'lb' : 'rb';
     var fabPos = options.position === 'left-bottom' ? 'fab-lb' : 'fab-rb';
@@ -166,6 +167,7 @@
       append('assistant', '');
       try {
       token = token || await options.tokenProvider();
+      console.log('[EASPAssistant] got token from tokenProvider:', token ? `${token.substring(0, 20)}...` : 'empty');
       // Normalize baseUrl: remove trailing slash
       var normalizedBaseUrl = baseUrl.replace(/\/$/, '');
       var payload = {
@@ -175,11 +177,14 @@
         execution_mode: executionMode,
         page_context: (options.pageContextProvider && options.pageContextProvider()) || { url: location.href, title: document.title }
       };
+      console.log('[EASPAssistant] sending chat request to:', normalizedBaseUrl + '/api/embed/v1/assistant/chat', payload);
       var res = await fetch(normalizedBaseUrl + '/api/embed/v1/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'easp-api-token': token }, body: JSON.stringify(payload) });
-        if (res.status === 401) { token = await options.tokenProvider(); res = await fetch(normalizedBaseUrl + '/api/embed/v1/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'easp-api-token': token }, body: JSON.stringify(payload) }); }
-        if (!res.ok) throw new Error(await res.text());
-        await readSSE(res, function (chunk) { assistantText += chunk; append('assistant', assistantText); }, appendStep, function (id) { conversationId = id; localStorage.setItem('easp_embed_conversation_id', id); });
+        if (res.status === 401) { console.log('[EASPAssistant] 401, refreshing token'); token = await options.tokenProvider(); res = await fetch(normalizedBaseUrl + '/api/embed/v1/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'easp-api-token': token }, body: JSON.stringify(payload) }); }
+        if (!res.ok) { var errTxt = await res.text(); console.error('[EASPAssistant] request failed:', res.status, errTxt); throw new Error(errTxt); }
+        console.log('[EASPAssistant] request started, reading SSE');
+        await readSSE(res, function (chunk) { assistantText += chunk; append('assistant', assistantText); }, appendStep, function (id) { conversationId = id; localStorage.setItem('easp_embed_conversation_id', id); console.log('[EASPAssistant] new conversation:', id); });
       } catch (err) {
+        console.error('[EASPAssistant] error:', err);
         append('assistant', '请求失败：' + (err && err.message ? err.message : String(err)));
       }
     }
