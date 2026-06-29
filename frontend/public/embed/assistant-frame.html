@@ -14,6 +14,7 @@
     .user { margin-left:auto; background:#1677ff; color:#fff; }
     .assistant { background:#fff; border:1px solid #e5e7eb; color:#111827; }
     .step{max-width:90%;margin:8px 0;padding:8px 10px;border-radius:12px;background:#f1f5f9;border:1px solid #e2e8f0;font-size:13px}.step-title{display:flex;align-items:center;gap:6px;font-weight:500;color:#334155}.step-dot{width:8px;height:8px;border-radius:50%;background:#94a3b8}.step-dot.running{background:#f59e0b;animation:pulse 2s infinite}.step-dot.done{background:#10b981}.step-dot.error{background:#ef4444}.step-result{margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#475569;white-space:pre-wrap}@keyframes pulse{0%{opacity:1}50%{opacity:.5}100%{opacity:1}}
+    .msg p{margin:6px 0}.msg ul,.msg ol{margin:6px 0;padding-left:20px}.msg code{background:#f1f5f9;padding:2px 5px;border-radius:4px;font-size:12px}.msg pre{background:#f1f5f9;padding:10px;border-radius:8px;overflow-x:auto;font-size:12px}.msg h1,.msg h2,.msg h3,.msg h4{margin:10px 0 6px}.msg a{color:#1677ff;text-decoration:underline}
     .ft { display:flex; gap:8px; padding:10px; border-top:1px solid #e5e7eb; }
     textarea { flex:1; resize:none; border:1px solid #d1d5db; border-radius:10px; padding:9px; outline:none; }
     button { border:0; border-radius:10px; background:#1677ff; color:#fff; padding:0 14px; cursor:pointer; }
@@ -38,17 +39,38 @@
   function escapeHtml(text) {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
+  // 简单 markdown 渲染
+  function renderMarkdown(text) {
+    if (!text) return '';
+    text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    text = text.replace(/^### (.*)$/gm, '<h4>$1</h4>');
+    text = text.replace(/^## (.*)$/gm, '<h3>$1</h3>');
+    text = text.replace(/^# (.*)$/gm, '<h2>$1</h2>');
+    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    text = text.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    text = text.replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>');
+    text = text.replace(/(<li>.*<\/li>)/g, '<ul>$1</ul>');
+    var paragraphs = text.split(/\n\s*\n/);
+    return paragraphs.map(function(p) {
+      p = p.trim();
+      if (!p) return '';
+      if (p.startsWith('<') && p.endsWith('>')) return p;
+      return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+    }).join('');
+  }
   function append(role, text, replaceLast) {
     let el = replaceLast ? msgs.lastElementChild : null;
     if (!el || !el.classList.contains(role)) {
       el = document.createElement('div'); el.className = 'msg ' + role; msgs.appendChild(el);
     }
-    el.textContent = text; msgs.scrollTop = msgs.scrollHeight;
+    el.innerHTML = renderMarkdown(text); msgs.scrollTop = msgs.scrollHeight;
   }
   function appendStep(step) {
     const el = document.createElement('div');
-    el.className = 'step step-' + step.status;
-    el.innerHTML = '<div class="step-title"><span class="step-dot ' + step.status + '"></span><span>' + step.title + '</span></div>' + (step.result ? '<div class="step-result">' + escapeHtml(step.result) + '</div>' : '');
+    el.className = 'step';
+    el.innerHTML = '<div class="step-title"><span class="step-dot ' + (step.status || 'running') + '"></span><span>' + escapeHtml(step.title || step.text || step) + '</span></div>' + (step.result ? '<div class="step-result">' + escapeHtml(step.result) + '</div>' : '');
     msgs.appendChild(el);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -79,13 +101,17 @@
             console.log('[EASPAssistant iframe] received session_id:', sessionId);
             continue;
           }
+          if (eventType === 'step' && data.title && onStep) {
+            onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
+            continue;
+          }
           if (data.conversation_id && onConversation) onConversation(data.conversation_id);
           if (typeof data.content === 'string') onText(data.content);
           if (typeof data.delta === 'string') onText(data.delta);
-          if (eventType === 'step' && data.step && data.title) {
-            onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
-          }
-        } catch(e) {}
+          if (data.step && onStep && !eventType) onStep(data.step);
+        } catch(e) {
+          console.warn('[EASPAssistant iframe] parse error:', e);
+        }
       }
     }
   }

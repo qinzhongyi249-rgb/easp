@@ -1,6 +1,6 @@
 (function () {
   function styles() {
-    return '.easp-fab{position:fixed;width:56px;height:56px;border-radius:50%;border:0;background:#1677ff;color:#fff;box-shadow:0 8px 24px rgba(22,119,255,.35);font-size:22px;z-index:2147483647;cursor:pointer;user-select:none}.easp-fab.dragging{cursor:grabbing}.easp-fab img,.easp-fab svg{width:100%;height:100%;border-radius:50%;object-fit:cover}.easp-panel{position:fixed;width:min(420px,calc(100vw - 24px));height:min(680px,calc(100vh - 24px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 16px 48px rgba(15,23,42,.18);z-index:2147483647;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.easp-panel.open{display:flex}.rb{right:20px;bottom:88px}.lb{left:20px;bottom:88px}.fab-rb{right:24px;bottom:24px}.fab-lb{left:24px;bottom:24px}.easp-hd{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:#1677ff;color:#fff;font-weight:600}.easp-hd .easp-actions{display:flex;gap:8px;align-items:center}.easp-new{color:#fff;background:rgba(255,255,255,0.2);border:0;font-size:18px;padding:0 8px;border-radius:6px;cursor:pointer}.easp-close{border:0;background:transparent;color:#fff;font-size:20px;cursor:pointer}.easp-msgs{flex:1;overflow:auto;padding:14px;background:#f8fafc}.msg{max-width:86%;margin:8px 0;padding:10px 12px;border-radius:14px;white-space:pre-wrap;line-height:1.5;font-size:14px}.msg .msg-meta{font-size:12px;color:#999;margin-bottom:4px}.msg.user{margin-left:auto;background:#1677ff;color:#fff}.msg.assistant{background:#fff;border:1px solid #e5e7eb;color:#111827}.easp-ft{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb}.easp-input{flex:1;resize:none;border:1px solid #d1d5db;border-radius:10px;padding:9px;outline:none}.easp-send{border:0;border-radius:10px;background:#1677ff;color:#fff;padding:0 14px;cursor:pointer}@media(max-width:600px){.easp-panel{right:0!important;left:0!important;bottom:0!important;width:100vw;height:80vh;border-radius:18px 18px 0 0}.easp-fab{right:18px!important;left:auto!important}}';
+    return '.easp-fab{position:fixed;width:56px;height:56px;border-radius:50%;border:0;background:#1677ff;color:#fff;box-shadow:0 8px 24px rgba(22,119,255,.35);font-size:22px;z-index:2147483647;cursor:pointer;user-select:none}.easp-fab.dragging{cursor:grabbing}.easp-fab img,.easp-fab svg{width:100%;height:100%;border-radius:50%;object-fit:cover}.easp-panel{position:fixed;width:min(560px,calc(100vw - 24px));height:min(780px,calc(100vh - 24px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 16px 48px rgba(15,23,42,.18);z-index:2147483647;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.easp-panel.open{display:flex}.rb{right:20px;bottom:88px}.lb{left:20px;bottom:88px}.fab-rb{right:24px;bottom:24px}.fab-lb{left:24px;bottom:24px}.easp-hd{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:#1677ff;color:#fff;font-weight:600}.easp-hd .easp-actions{display:flex;gap:8px;align-items:center}.easp-new{color:#fff;background:rgba(255,255,255,0.2);border:0;font-size:18px;padding:0 8px;border-radius:6px;cursor:pointer}.easp-close{border:0;background:transparent;color:#fff;font-size:20px;cursor:pointer}.easp-msgs{flex:1;overflow:auto;padding:14px;background:#f8fafc}.msg{max-width:88%;margin:8px 0;padding:10px 12px;border-radius:14px;line-height:1.6;font-size:14px}.msg .msg-meta{font-size:12px;color:#999;margin-bottom:4px}.msg.user{margin-left:auto;background:#1677ff;color:#fff}.msg.assistant{background:#fff;border:1px solid #e5e7eb;color:#111827}.msg.step{background:#f0f9ff;border:1px solid #bae7ff;color:#0050b3;font-size:13px}.step{max-width:90%;margin:8px 0;padding:8px 10px;border-radius:12px;background:#f1f5f9;border:1px solid #e2e8f0;font-size:13px}.step-title{display:flex;align-items:center;gap:6px;font-weight:500;color:#334155}.step-dot{width:8px;height:8px;border-radius:50%;background:#94a3b8}.step-dot.running{background:#f59e0b;animation:pulse 2s infinite}.step-dot.done{background:#10b981}.step-dot.error{background:#ef4444}.step-result{margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;color:#475569;white-space:pre-wrap}.msg p{margin:6px 0}.msg ul,.msg ol{margin:6px 0;padding-left:20px}.msg code{background:#f1f5f9;padding:2px 5px;border-radius:4px;font-size:12px}.msg pre{background:#f1f5f9;padding:10px;border-radius:8px;overflow-x:auto;font-size:12px}.msg h1,.msg h2,.msg h3,.msg h4{margin:10px 0 6px}.msg a{color:#1677ff;text-decoration:underline}.easp-ft{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb}.easp-input{flex:1;resize:none;border:1px solid #d1d5db;border-radius:10px;padding:9px;outline:none}.easp-send{border:0;border-radius:10px;background:#1677ff;color:#fff;padding:0 14px;cursor:pointer}@keyframes pulse{0%{opacity:1}50%{opacity:.5}100%{opacity:1}}@media(max-width:600px){.easp-panel{right:0!important;left:0!important;bottom:0!important;width:100vw;height:85vh!important}';
   }
   async function readSSE(res, onText, onStep, onConversation) {
     var reader = res.body && res.body.getReader();
@@ -34,11 +34,18 @@
             console.log('[EASPAssistant] received session_id:', sessionId);
             continue;
           }
+          if (eventType === 'step' && onStep && data.title) {
+            // 完整的执行步骤事件：包含title/status/result
+            onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
+            continue;
+          }
           if (data.conversation_id && onConversation) onConversation(data.conversation_id);
           if (typeof data.content === 'string') onText(data.content);
           if (typeof data.delta === 'string') onText(data.delta);
-          if (data.step && onStep) onStep(data.step);
-        } catch (e) {}
+          if (data.step && onStep && !eventType) onStep(data.step);
+        } catch (e) {
+          console.warn('[EASPAssistant] parse SSE error:', e);
+        }
       }
     }
   }
@@ -156,22 +163,69 @@
       lastClickTime = Date.now();
     });
 
-    function append(role, content) {
-      var el = msgs.lastElementChild;
-      if (!el || !el.classList.contains(role) || role === 'user') {
-        el = document.createElement('div');
-        el.className = 'msg ' + role;
-        msgs.appendChild(el);
+    function escapeHtml(text) {
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    // 简单 markdown 渲染（满足基本需求）
+    function renderMarkdown(text) {
+      if (!text) return '';
+      // 代码块
+      text = text.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+      // 行内代码
+      text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+      // 标题
+      text = text.replace(/^### (.*)$/gm, '<h4>$1</h4>');
+      text = text.replace(/^## (.*)$/gm, '<h3>$1</h3>');
+      text = text.replace(/^# (.*)$/gm, '<h2>$1</h2>');
+      // 粗体
+      text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // 斜体
+      text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      // 链接
+      text = text.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      // 无序列表
+      text = text.replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>');
+      text = text.replace(/(<li>.*<\/li>)/g, '<ul>$1</ul>');
+      // 换行转p
+      var paragraphs = text.split(/\n\s*\n/);
+      return paragraphs.map(function(p) {
+        p = p.trim();
+        if (!p) return '';
+        // 如果已经是标签，不包装
+        if (p.startsWith('<') && p.endsWith('>')) return p;
+        return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+      }).join('');
+    }
+    function append(role, content, replaceLast) {
+      let el = replaceLast ? msgs.lastElementChild : null;
+      if (!el || !el.classList.contains(role)) {
+        el = document.createElement('div'); el.className = 'msg ' + role; msgs.appendChild(el);
       }
-      el.textContent = content;
+      // incremental append: do not re-render entire content, just append chunk to last text node
+      // keep markdown rendered structure intact, only append plain text to the last paragraph
+      if (replaceLast && el.lastChild) {
+        // check if last child is a text node or element
+        if (el.lastChild.nodeType === 3) {
+          el.lastChild.nodeValue += content;
+        } else if (el.lastChild.nodeType === 1 && el.lastChild.tagName === 'P') {
+          el.lastChild.appendChild(document.createTextNode(content));
+        } else {
+          // fallback: append text node
+          el.appendChild(document.createTextNode(content));
+        }
+      } else {
+        // new message: full render
+        el.innerHTML = renderMarkdown(content);
+      }
       msgs.scrollTop = msgs.scrollHeight;
     }
     function appendStep(step) {
-      // 执行过程气泡
+      // 执行过程气泡 - 完整格式带状态圆点
       var el = document.createElement('div');
-      el.className = 'msg step';
-      el.style.cssText = 'background:#f0f9ff;border:1px solid #bae7ff;color:#0050b3;font-size:13px;padding:8px 10px;border-radius:12px;max-width:90%;margin:8px 0;';
-      el.textContent = step.text || step;
+      el.className = 'step';
+      var titleHtml = '<div class="step-title"><span class="step-dot ' + (step.status || 'running') + '"></span><span>' + escapeHtml(step.title || step.text || step) + '</span></div>';
+      var resultHtml = step.result ? '<div class="step-result">' + escapeHtml(step.result) + '</div>' : '';
+      el.innerHTML = titleHtml + resultHtml;
       msgs.appendChild(el);
       msgs.scrollTop = msgs.scrollHeight;
     }
@@ -183,7 +237,7 @@
       input.value = '';
       append('user', text);
       var assistantText = '';
-      append('assistant', '');
+      append('assistant', '', false);
       try {
       token = token || await options.tokenProvider();
       console.log('[EASPAssistant] got token from tokenProvider:', token ? `${token.substring(0, 20)}...` : 'empty');
@@ -201,7 +255,7 @@
         if (res.status === 401) { console.log('[EASPAssistant] 401, refreshing token'); token = await options.tokenProvider(); res = await fetch(normalizedBaseUrl + '/api/embed/v1/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'easp-api-token': token }, body: JSON.stringify(payload) }); }
         if (!res.ok) { var errTxt = await res.text(); console.error('[EASPAssistant] request failed:', res.status, errTxt); throw new Error(errTxt); }
         console.log('[EASPAssistant] request started, reading SSE');
-        await readSSE(res, function (chunk) { assistantText += chunk; append('assistant', assistantText); }, appendStep, function (id) { conversationId = id; localStorage.setItem('easp_embed_conversation_id', id); console.log('[EASPAssistant] new conversation:', id); });
+        await readSSE(res, function (chunk) { assistantText += chunk; append('assistant', assistantText, true); }, appendStep, function (id) { conversationId = id; localStorage.setItem('easp_embed_conversation_id', id); console.log('[EASPAssistant] new conversation:', id); });
       } catch (err) {
         console.error('[EASPAssistant] error:', err);
         append('assistant', '请求失败：' + (err && err.message ? err.message : String(err)));
