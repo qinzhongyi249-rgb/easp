@@ -716,11 +716,11 @@ func (h *EmbedHandler) Chat(c *gin.Context) {
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
 	// userID is already obtained in middleware, stored in context, not needed here
 	var apiKey *models.APIKey
-	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
-		if ak, ok := apiKeyVal.(models.APIKey); ok {
-			apiKey = &ak
+		if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
+			if ak, ok := apiKeyVal.(*models.APIKey); ok {
+				apiKey = ak
+			}
 		}
-	}
 
 	// 处理会话
 	sessionID := req.SessionID
@@ -877,11 +877,11 @@ func (h *EmbedHandler) GetAssistantConversationMessages(c *gin.Context) {
 func (h *EmbedHandler) CreateSession(c *gin.Context) {
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
 	var apiKey *models.APIKey
-	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
-		if ak, ok := apiKeyVal.(models.APIKey); ok {
-			apiKey = &ak
+		if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
+			if ak, ok := apiKeyVal.(*models.APIKey); ok {
+				apiKey = ak
+			}
 		}
-	}
 
 	var req struct {
 		VisitorID string          `json:"visitor_id"`

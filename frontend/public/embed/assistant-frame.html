@@ -28,9 +28,10 @@
   </div>
   <script>
   let token = '';
+  let sessionId = localStorage.getItem('easp_embed_frame_session_id') || '';
+  let conversationId = localStorage.getItem('easp_embed_frame_conversation_id') || '';
   let assistantName = 'EASP AI 助手';
   let pageContext = { url: location.href, title: document.title };
-  let conversationId = localStorage.getItem('easp_embed_frame_conversation_id') || '';
   const msgs = document.getElementById('msgs');
   const input = document.getElementById('input');
   const state = document.getElementById('state');
@@ -59,17 +60,30 @@
       buffer += decoder.decode(r.value, { stream: true });
       const events = buffer.split('\n\n'); buffer = events.pop() || '';
       for (const event of events) {
-        const eventTypeLine = event.split('\n').find(l => l.startsWith('event:'));
-        const line = event.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+        let eventType = null;
+        let dataLine = null;
+        const lines = event.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLine = line;
+          }
+        }
+        if (!dataLine) continue;
         try {
-          const data = JSON.parse(line.slice(5).trim());
-          if (data.conversation_id) onConversation(data.conversation_id);
-          if (data.content) onText(data.content); if (data.delta) onText(data.delta);
-          if (eventTypeLine) {
-            const eventType = eventTypeLine.slice(6).trim();
-            if (eventType === 'step' && onStep && data.step && data.title) {
-              onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
-            }
+          const data = JSON.parse(dataLine.slice(5).trim());
+          if (eventType === 'session_id' && data.session_id) {
+            sessionId = data.session_id;
+            localStorage.setItem('easp_embed_frame_session_id', sessionId);
+            console.log('[EASPAssistant iframe] received session_id:', sessionId);
+            continue;
+          }
+          if (data.conversation_id && onConversation) onConversation(data.conversation_id);
+          if (typeof data.content === 'string') onText(data.content);
+          if (typeof data.delta === 'string') onText(data.delta);
+          if (eventType === 'step' && data.step && data.title) {
+            onStep({ step: data.step, title: data.title, status: data.status || 'running', result: data.result });
           }
         } catch(e) {}
       }
@@ -82,7 +96,7 @@
       let answer = ''; append('assistant', '', false);
       console.log('[EASPAssistant iframe] sending chat request, token:', token ? `${token.substring(0, 20)}...` : 'empty');
       const res = await fetch('/embed/v1/assistant/chat', { method:'POST', headers:{ 'Content-Type':'application/json', 'easp-api-token': token }, body: JSON.stringify({
-        session_id: conversationId || undefined,
+        session_id: sessionId || undefined,
         message: text,
         assistant_name: assistantName,
         page_context: pageContext,
@@ -91,12 +105,12 @@
       if (!res.ok) { const errTxt = await res.text(); console.error('[EASPAssistant iframe] request failed:', res.status, errTxt); append('assistant', '请求失败：' + errTxt, true); return; }
       await readSSE(res, chunk => { answer += chunk; append('assistant', answer, true); }, id => { conversationId = id; localStorage.setItem('easp_embed_frame_conversation_id', id); console.log('[EASPAssistant iframe] new conversation:', id); }, appendStep);
     }
-  window.addEventListener('message', (event) => {
+    window.addEventListener('message', (event) => {
       const data = event.data || {};
       console.log('[EASPAssistant iframe] received message:', data);
       if (data.type === 'EASP_ASSISTANT_TOKEN') { token = data.token || ''; pageContext = data.context || pageContext; if (data.assistantName) assistantName = data.assistantName; document.querySelector('.hd span').textContent = assistantName; state.textContent = token ? '已连接' : '无 Token'; }
       if (data.type === 'EASP_ASSISTANT_CONTEXT_UPDATE') pageContext = data.context || pageContext;
-      if (data.type === 'EASP_ASSISTANT_LOGOUT') { token = ''; state.textContent = '已退出'; }
+      if (data.type === 'EASP_ASSISTANT_LOGOUT') { token = ''; sessionId = ''; conversationId = ''; localStorage.removeItem('easp_embed_frame_session_id'); localStorage.removeItem('easp_embed_frame_conversation_id'); state.textContent = '已退出'; }
     });
     document.getElementById('send').onclick = send;
     input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });

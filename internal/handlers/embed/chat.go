@@ -57,8 +57,8 @@ func Chat(c *gin.Context, chatHandler *handlers.ChatHandler) {
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
 	var apiKey *models.APIKey
 	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
-		if ak, ok := apiKeyVal.(models.APIKey); ok {
-			apiKey = &ak
+		if ak, ok := apiKeyVal.(*models.APIKey); ok {
+			apiKey = ak
 		}
 	}
 
@@ -97,6 +97,9 @@ func Chat(c *gin.Context, chatHandler *handlers.ChatHandler) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+
+	// 首先发送 session_id 给前端保存
+	SendSSE(c, "session_id", map[string]string{"session_id": sessionID})
 
 	// 获取模型配置
 	_, cfgErr := chatHandler.ModelService.GetConfigForTenant(tenantID, "")
@@ -183,8 +186,8 @@ func CreateSession(c *gin.Context) {
 	tenantID := c.GetString(middleware.ContextEmbedTenantID)
 	var apiKey *models.APIKey
 	if apiKeyVal, ok := c.Get(middleware.ContextAPIKey); ok {
-		if ak, ok := apiKeyVal.(models.APIKey); ok {
-			apiKey = &ak
+		if ak, ok := apiKeyVal.(*models.APIKey); ok {
+			apiKey = ak
 		}
 	}
 

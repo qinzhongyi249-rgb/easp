@@ -14,10 +14,26 @@
       var events = buffer.split('\n\n');
       buffer = events.pop() || '';
       for (var i = 0; i < events.length; i++) {
-        var line = events[i].split('\n').find(function (l) { return l.indexOf('data:') === 0; });
-        if (!line) continue;
+        var eventType = null;
+        var dataLine = null;
+        var lines = events[i].split('\n');
+        for (var j = 0; j < lines.length; j++) {
+          var line = lines[j];
+          if (line.indexOf('event:') === 0) {
+            eventType = line.slice(6).trim();
+          } else if (line.indexOf('data:') === 0) {
+            dataLine = line;
+          }
+        }
+        if (!dataLine) continue;
         try {
-          var data = JSON.parse(line.slice(5).trim());
+          var data = JSON.parse(dataLine.slice(5).trim());
+          if (eventType === 'session_id' && data.session_id) {
+            sessionId = data.session_id;
+            localStorage.setItem('easp_embed_session_id', sessionId);
+            console.log('[EASPAssistant] received session_id:', sessionId);
+            continue;
+          }
           if (data.conversation_id && onConversation) onConversation(data.conversation_id);
           if (typeof data.content === 'string') onText(data.content);
           if (typeof data.delta === 'string') onText(data.delta);
@@ -54,13 +70,16 @@
     var send = shadow.querySelector('.easp-send');
     newBtn.onclick = newConversation;
     var conversationId = localStorage.getItem('easp_embed_conversation_id') || '';
+    var sessionId = localStorage.getItem('easp_embed_session_id') || '';
     var token = '';
 
     // 新建对话
     function newConversation() {
       conversationId = '';
+      sessionId = '';
       msgs.innerHTML = '';
       localStorage.removeItem('easp_embed_conversation_id');
+      localStorage.removeItem('easp_embed_session_id');
       append('assistant', options.welcome || '你好，我是 EASP AI 助手。');
     }
 
@@ -171,7 +190,7 @@
       // Normalize baseUrl: remove trailing slash
       var normalizedBaseUrl = baseUrl.replace(/\/$/, '');
       var payload = {
-        session_id: conversationId || undefined,
+        session_id: sessionId || undefined,
         message: text,
         assistant_name: options.title || 'EASP AI 助手',
         execution_mode: executionMode,
