@@ -1,7 +1,7 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <title>EASP 接入文档</title>
 <style>
 body{
@@ -11,6 +11,7 @@ body{
   padding: 0 24px;
   line-height: 1.7;
   color: #172033;
+  background: #ffffff;
 }
 pre{
   background: #0f172a;
@@ -64,10 +65,12 @@ h3{
 </head>
 <body>
 <h1>EASP AI助手接入手册</h1>
+
 <blockquote>
 <p>本文面向第三方业务系统开发者，说明如何把 EASP AI 助手嵌入到 H5/PC 页面。
 管理后台「AI 助手」页弹窗会按当前租户动态生成 JS SDK、iframe、token exchange 代码片段。</p>
 </blockquote>
+
 <h2>1. 接入流程</h2>
 <ol>
 <li>EASP 管理后台创建「嵌入接入应用」，保存一次性展示的 <code>App Secret</code>。</li>
@@ -77,45 +80,50 @@ h3{
 <li>业务系统前端通过 JS SDK 或 iframe 嵌入助手，只接收业务后端返回的 <code>easp-api-token</code>。</li>
 <li>助手接口使用 <code>easp-api-token</code>，真实权限仍由 EASP 用户/角色/工具/Skill/MCP 体系实时判断。</li>
 </ol>
+
 <h2>2. 前置条件：外部用户已同步</h2>
 <p><code>/api/v1/embed/token/exchange</code> 不默认自动创建用户。当前 <code>external_user_id</code> 必须已经通过 <code>/api/v1/embed/users/sync</code> 同步，或已经存在有效的外部用户绑定关系。</p>
+
 <h2>3. 服务端换 token</h2>
-<p><code>http
-POST /api/v1/embed/token/exchange
+<pre>POST /api/v1/embed/token/exchange
 X-EASP-App-Id: &lt;app_id&gt;
 X-EASP-Timestamp: &lt;unix_seconds&gt;
 X-EASP-Nonce: &lt;random_nonce&gt;
 X-EASP-Signature: &lt;hmac_sha256_signature&gt;
-Content-Type: application/json</code></p>
+Content-Type: application/json
+</pre>
+
 <p>请求体：</p>
-<p><code>json
-{
+<pre>{
   "tenant_id": "tenant_xxx",
   "external_system": "crm",
   "external_user_id": "u_10001",
   "external_access_token": "&lt;current_business_user_token&gt;",
   "external_token_expires_at": 1790000000,
   "auto_create_user": true,
-  "default_role_ids": ["role-xxx"]
-}</code></p>
+  "default_role_ids": ["role_xxx"]
+}
+</pre>
+
 <p>签名规则：</p>
-<p><code>text
-secret_hash = SHA256(app_secret)
+<pre>secret_hash = SHA256(app_secret)
 payload = app_id=...&amp;timestamp=...&amp;nonce=...&amp;external_system=...&amp;external_user_id=...&amp;tenant_id=...
-signature = HMAC-SHA256(secret_hash, payload)</code></p>
+signature = HMAC-SHA256(secret_hash, payload)
+</pre>
+
 <blockquote>
 <p><code>App Secret</code> 只能放在业务系统后端，不能出现在 H5、PC 前端、JS SDK 参数或 iframe URL 中。</p>
 <p><code>external_access_token</code> 是当前业务系统登录用户的业务 token，仅在业务系统后端换取 <code>easp-api-token</code> 时传给 EASP。EASP 不会把它返回给浏览器，也不会把明文写入 <code>easp-api-token</code>；<code>easp-api-token</code> 只携带不可反推的引用。需要代用户调用业务系统 API 的连接器，应在 EASP 连接器配置中使用 <code>credential_mode=user_token</code>，并由 <code>user_token_header</code> / <code>user_token_prefix</code> 控制注入方式。</p>
 <p><strong>auto_create_user</strong>：开启后，如果未找到匹配的外部用户绑定，EASP 会自动创建 EASP 用户并绑定，不需要提前手动导入；<code>default_role_ids</code> 必须同时配置，分配默认租户角色。</p>
 </blockquote>
+
 <h2>4. JS SDK 嵌入</h2>
-<p>```html</p>
-<script src="https://easp.example.com/embed/assistant.js"></script>
-<script>
+<pre>&lt;script src="https://easp.example.com/embed/assistant.js"&gt;&lt;/script&gt;
+&lt;script&gt;
   EASPAssistant.init({
     baseUrl: 'https://easp.example.com',
     tenantId: 'tenant_xxx',
-    tokenProvider: async () => {
+    tokenProvider: async () =&gt; {
       const res = await fetch('/api/easp-assistant-token', { method: 'POST' });
       const data = await res.json();
       return data.easp_api_token;
@@ -127,96 +135,53 @@ signature = HMAC-SHA256(secret_hash, payload)</code></p>
       display_name: '张三'
     }
   });
-</script>
-<p>```</p>
+&lt;/script&gt;
+</pre>
+
 <p><strong>JS SDK 配置参数：</strong></p>
 <table>
 <thead>
-<tr>
-<th>参数</th>
-<th>说明</th>
-<th>是否必填</th>
-</tr>
+<tr><th>参数</th><th>说明</th><th>是否必填</th></tr>
 </thead>
 <tbody>
-<tr>
-<td><code>baseUrl</code></td>
-<td>EASP 平台访问地址（不含结尾 <code>/</code>）</td>
-<td>✅ 必填</td>
-</tr>
-<tr>
-<td><code>tenantId</code></td>
-<td>租户 ID</td>
-<td>✅ 必填</td>
-</tr>
-<tr>
-<td><code>tokenProvider</code></td>
-<td>获取 <code>easp-api-token</code> 的异步函数</td>
-<td>✅ 必填</td>
-</tr>
-<tr>
-<td><code>executionMode</code></td>
-<td><code>normal</code>（真实执行工具）/ <code>sandbox</code>（只规划不执行）</td>
-<td>否，默认 <code>normal</code></td>
-</tr>
-<tr>
-<td><code>user</code></td>
-<td>当前外部用户信息 <code>{ external_system, external_user_id, display_name }</code></td>
-<td>✅ 必填</td>
-</tr>
+<tr><td><code>baseUrl</code></td><td>EASP 平台访问地址（不含结尾 /）</td><td>✅ 必填</td></tr>
+<tr><td><code>tenantId</code></td><td>租户 ID</td><td>✅ 必填</td></tr>
+<tr><td><code>tokenProvider</code></td><td>获取 <code>easp-api-token</code> 的异步函数</td><td>✅ 必填</td></tr>
+<tr><td><code>executionMode</code></td><td><code>normal</code>（真实执行工具）/ <code>sandbox</code>（只规划不执行）</td><td>否，默认 <code>normal</code></td></tr>
+<tr><td><code>user</code></td><td>当前外部用户信息 <code>{ external_system, external_user_id, display_name }</code></td><td>✅ 必填</td></tr>
 </tbody>
 </table>
+
 <h2>5. iframe 嵌入</h2>
-<p>```html</p>
-<p><iframe
+<pre>&lt;iframe
   id="easp-assistant"
   src="https://easp.example.com/embed/assistant-frame.html?tenant_id=tenant_xxx"
   style="position:fixed;right:20px;bottom:20px;width:420px;height:680px;border:0;z-index:99999;"
-></iframe></p>
-<p>```</p>
+&gt;&lt;/iframe&gt;
+</pre>
+
 <h2>6. 嵌入式助手接口</h2>
-<p><code>http
-POST /embed/v1/assistant/chat
+<pre>POST /embed/v1/assistant/chat
 GET  /embed/v1/assistant/conversations
-GET  /embed/v1/assistant/conversations/{conversation_id}/messages</code></p>
+GET  /embed/v1/assistant/conversations/{conversation_id}/messages
+</pre>
+
 <p><strong>聊天请求体字段：</strong></p>
 <table>
 <thead>
-<tr>
-<th>字段</th>
-<th>说明</th>
-<th>是否必填</th>
-</tr>
+<tr><th>字段</th><th>说明</th><th>是否必填</th></tr>
 </thead>
 <tbody>
-<tr>
-<td><code>session_id</code></td>
-<td>会话 ID，不传自动新建，用于历史上下文</td>
-<td>否</td>
-</tr>
-<tr>
-<td><code>message</code></td>
-<td>用户当前消息</td>
-<td>✅ 必填</td>
-</tr>
-<tr>
-<td><code>assistant_name</code></td>
-<td>自定义助手名称</td>
-<td>否</td>
-</tr>
-<tr>
-<td><code>execution_mode</code></td>
-<td><code>normal</code> 真实调用工具 / <code>sandbox</code> 只规划不执行</td>
-<td>否，默认 <code>normal</code></td>
-</tr>
-<tr>
-<td><code>page_context</code></td>
-<td>当前页面上下文对象，帮助 AI 理解问题</td>
-<td>否</td>
-</tr>
+<tr><td><code>session_id</code></td><td>会话 ID，不传自动新建，用于历史上下文</td><td>否</td></tr>
+<tr><td><code>message</code></td><td>用户当前消息</td><td>✅ 必填</td></tr>
+<tr><td><code>assistant_name</code></td><td>自定义助手名称</td><td>否</td></tr>
+<tr><td><code>execution_mode</code></td><td><code>normal</code> 真实调用工具 / <code>sandbox</code> 只规划不执行</td><td>否，默认 <code>normal</code></td></tr>
+<tr><td><code>page_context</code></td><td>当前页面上下文对象，帮助 AI 理解问题</td><td>否</td></tr>
 </tbody>
 </table>
+
 <p>这些接口只接受 <code>easp-api-token</code>，不接受后台管理 JWT。</p>
+
 <h2>7. 自测清单</h2>
 <ul>
 <li><code>/embed/assistant.js</code> 可访问。</li>
@@ -226,5 +191,6 @@ GET  /embed/v1/assistant/conversations/{conversation_id}/messages</code></p>
 <li>浏览器 Network 中助手聊天接口返回 200。</li>
 <li>审计日志能看到外部系统、外部用户、app_id。</li>
 </ul>
+
 </body>
 </html>
