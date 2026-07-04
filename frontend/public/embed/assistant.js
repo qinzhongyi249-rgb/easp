@@ -612,11 +612,14 @@ function initAssistant(options) {
   const inputEl = shadowRoot.querySelector(".easp-input");
   const sendButton = shadowRoot.querySelector(".easp-send");
 
-  // session_id 是主字段，兼容读取旧的 easp_embed_conversation_id
-  let sessionId =
-    localStorage.getItem("easp_embed_session_id") ||
-    localStorage.getItem("easp_embed_conversation_id") ||
-    "";
+  // session_id = embed_sessions.id（后端 event:session_id 下发）。
+  // 旧版曾把 conversation_id 存进 easp_embed_conversation_id，那个 ID 不是 session_id，
+  // 用它请求会 404 Session not found，所以本次不再读老 key。用户历史会话会自动开新会话。
+  let sessionId = localStorage.getItem("easp_embed_session_id") || "";
+  // 清理旧 key，避免后续误取
+  if (localStorage.getItem("easp_embed_conversation_id")) {
+    localStorage.removeItem("easp_embed_conversation_id");
+  }
   let apiToken = "";
   let dragging = false;
   let moved = false;
@@ -663,7 +666,7 @@ function initAssistant(options) {
           ? options.pageContextProvider()
           : { url: location.href, title: document.title },
       };
-      if (sessionId) body.session_id = sessionId;
+      // session_id 在下面 for 循环里根据当前状态注入/删除（支持 404 自动开新会话重试）
       if (options.assistantName || options.title) {
         body.assistant_name = options.assistantName || options.title;
       }
@@ -675,8 +678,10 @@ function initAssistant(options) {
       }
 
       let response = null;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      // 最多 3 次：401 → 换 token 重发；404 Session not found → 清 sessionID 开新会话重发
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         apiToken = apiToken || await options.tokenProvider();
+        if (sessionId) body.session_id = sessionId; else delete body.session_id;
         response = await fetch(baseUrl + "/api/embed/v1/assistant/chat", {
           method: "POST",
           headers: {
@@ -686,11 +691,21 @@ function initAssistant(options) {
           body: JSON.stringify(body),
         });
 
-        if (response.status !== 401 || attempt === 1) {
-          break;
+        if (response.status === 401 && attempt < 2) {
+          apiToken = await options.tokenProvider();
+          continue;
         }
-
-        apiToken = await options.tokenProvider();
+        if (response.status === 404 && sessionId) {
+          // 后端认不出这个 session_id（可能已过期/被清理/写入了错误 ID），
+          // 清掉本地缓存，重发一次即可自动开新会话
+          const text = await response.text().catch(() => "");
+          if (text.includes("Session not found")) {
+            sessionId = "";
+            localStorage.removeItem("easp_embed_session_id");
+            if (attempt < 2) continue;
+          }
+        }
+        break;
       }
 
       if (!response.ok) {
@@ -701,17 +716,17 @@ function initAssistant(options) {
         const eventName = packet.event;
         const data = packet.data && typeof packet.data === "object" ? packet.data : {};
 
-        // 优先取 event:session_id（后端主发的会话字段），兼容 data.session_id / conversation_id 兜底
+        // ⚠️ 会话字段只认 session_id。conversation_id 是记忆池对话 ID，
+        // 与 embed_sessions.id 不同名同义，用它覆盖会导致下一轮 "Session not found"。
+        // 后端主发 event:session_id（cmd/server ... embed.go: sendSSE(c, "session_id", ...)），
+        // 少数 event 包里也可能带 data.session_id，都算数据源。
         if (eventName === "session_id" && data.session_id) {
           sessionId = data.session_id;
           localStorage.setItem("easp_embed_session_id", sessionId);
           return;
         }
-        if (data.session_id) {
+        if (data.session_id && data.session_id !== sessionId) {
           sessionId = data.session_id;
-          localStorage.setItem("easp_embed_session_id", sessionId);
-        } else if (data.conversation_id) {
-          sessionId = data.conversation_id;
           localStorage.setItem("easp_embed_session_id", sessionId);
         }
 

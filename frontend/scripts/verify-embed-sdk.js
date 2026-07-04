@@ -73,6 +73,8 @@ const badPatterns = [
     reg: /messages:\s*\[\s*\{\s*role:\s*["']user["']/ },
   { name: '不能发送 tenant_id/user 字段（后端 EmbedChatRequest 无此字段）',
     reg: /body\.(tenant_id|user)\s*=/ },
+  { name: '不能用 data.conversation_id 覆写 sessionId（记忆池对话 ID != session_id）',
+    reg: /sessionId\s*=\s*data\.conversation_id/ },
 ];
 for (const bp of badPatterns) {
   results.push(check(bp.name, !bp.reg.test(distSrc)));
