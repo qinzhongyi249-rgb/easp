@@ -45,7 +45,12 @@ function getStyles() {
     .step-item.error .step-item-head::before{background:#ef4444}
     .step-title{font-weight:500;color:#334155}
     .step-meta{font-size:12px;color:#94a3b8;white-space:nowrap}
-    .step-result{margin-top:6px;color:#64748b;white-space:pre-wrap;word-break:break-word}
+    .step-result{margin-top:6px;color:#64748b;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto}
+    .step-tool-args{margin-top:6px;color:#64748b;font-size:12px}
+    .step-tool-args pre{margin:4px 0 0;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;max-height:160px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
+    .step-tool-missing{margin-top:8px;padding:8px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;color:#92400e;font-size:12px}
+    .step-tool-missing code{background:rgba(0,0,0,.06);padding:1px 6px;border-radius:4px;margin:0 4px 0 0;font-family:ui-monospace,Menlo,monospace}
+    .step-item.step-requires-input .step-item-head::before{background:#f59e0b}
     .answer-empty{color:#94a3b8}
     /* Markdown 渲染 */
     .answer-content{max-width:100%;overflow:hidden;line-height:1.7}
@@ -459,13 +464,18 @@ function createAssistantTurn(messagesEl) {
     for (const step of steps) {
       const item = document.createElement("div");
       item.className = "step-item " + step.status;
+      if (step.kind === "tool") item.classList.add("step-tool");
+      if (step.requiresInput) item.classList.add("step-requires-input");
 
       const head = document.createElement("div");
       head.className = "step-item-head";
 
       const title = document.createElement("span");
       title.className = "step-title";
-      title.textContent = step.title;
+      const icon = step.kind === "tool"
+        ? (step.requiresInput ? "⚠️ " : (step.status === "done" ? "✓ " : "🔧 "))
+        : "";
+      title.textContent = icon + step.title;
 
       const meta = document.createElement("span");
       meta.className = "step-meta";
@@ -475,11 +485,28 @@ function createAssistantTurn(messagesEl) {
       head.appendChild(meta);
       item.appendChild(head);
 
+      // 工具入参
+      if (step.argumentsText) {
+        const argsBlock = document.createElement("div");
+        argsBlock.className = "step-tool-args";
+        argsBlock.innerHTML = "<b>入参：</b><pre>" + escapeHtml(step.argumentsText) + "</pre>";
+        item.appendChild(argsBlock);
+      }
+      // 工具结果 / 步骤描述
       if (step.result) {
         const result = document.createElement("div");
         result.className = "step-result";
         result.textContent = step.result;
         item.appendChild(result);
+      }
+      // requires_input 时高亮显示 missing_fields
+      if (step.requiresInput && step.missingFields && step.missingFields.length) {
+        const missing = document.createElement("div");
+        missing.className = "step-tool-missing";
+        missing.innerHTML =
+          '<b>需要补充：</b>' +
+          step.missingFields.map(function(f){ return '<code>'+escapeHtml(f)+'</code>'; }).join(" ");
+        item.appendChild(missing);
       }
 
       stepBody.appendChild(item);
@@ -519,6 +546,59 @@ function createAssistantTurn(messagesEl) {
       });
 
       syncSummary(nextStatus === "error" ? "error" : "running", "处理中", "");
+      renderSteps();
+    },
+    // 工具调用开始：event:status stage=tool_calling 时调用
+    addToolCall(payload) {
+      const toolName = payload && payload.tool_name ? String(payload.tool_name) : "";
+      if (!toolName) return;
+      stepPanel.classList.remove("hidden");
+      const last = steps[steps.length - 1];
+      if (last && last.status === "running") last.status = "done";
+
+      steps.push({
+        kind: "tool",
+        toolName: toolName,
+        title: "调用工具 " + toolName,
+        status: "running",
+        argumentsText: payload.argumentsText || "",
+        result: "",
+        durationText: "",
+      });
+      syncSummary("running", "调用工具中", "");
+      renderSteps();
+    },
+    // 工具执行结束：event:tool 时调用（可能是成功、失败或 requires_input）
+    updateToolResult(payload) {
+      const name = payload && payload.name ? String(payload.name) : "";
+      if (!name) return;
+      // 从后往前找同名 tool 步骤，找不到就新建
+      let target = null;
+      for (let i = steps.length - 1; i >= 0; i -= 1) {
+        if (steps[i].kind === "tool" && steps[i].toolName === name) { target = steps[i]; break; }
+      }
+      if (!target) {
+        stepPanel.classList.remove("hidden");
+        target = { kind: "tool", toolName: name, title: "调用工具 " + name, status: "running" };
+        steps.push(target);
+      }
+      if (payload.argumentsText && !target.argumentsText) target.argumentsText = payload.argumentsText;
+      target.durationText = formatDuration(payload.elapsed_ms);
+
+      if (payload.requiresInput) {
+        target.status = "error";
+        target.requiresInput = true;
+        target.missingFields = Array.isArray(payload.missing_fields) ? payload.missing_fields : [];
+        target.title = "需要补充参数：" + name;
+        target.result = payload.summary || "";
+        syncSummary("error", "等待补充参数", "");
+      } else if (payload.errorText) {
+        target.status = "error";
+        target.result = payload.errorText;
+      } else {
+        target.status = "done";
+        target.result = payload.summary || "";
+      }
       renderSteps();
     },
     finish(payload) {
@@ -739,12 +819,54 @@ function initAssistant(options) {
         }
 
         if (eventName === "status" || eventName === "step") {
+          // tool_calling 阶段：为具体工具单独建气泡（带工具名+入参）；其它 status/step 走通用步骤
+          if (data.stage === "tool_calling" && data.tool_name) {
+            turn.addToolCall({
+              tool_name: data.tool_name,
+              // event:status 通常不带入参，这里留空，等 event:tool 再回填
+              argumentsText: "",
+            });
+            return;
+          }
           turn.addStep({
             title: data.title || data.message || data.step || eventName,
             status: data.status,
             result: data.result,
             elapsed_ms: data.elapsed_ms,
             stage_ms: data.stage_ms,
+          });
+          return;
+        }
+
+        // 工具执行完成（成功 / 失败 / 需要补参）—— 后端 sendSSE(SSEEventTool, {name, result, elapsed_ms, arguments?, missing_fields?, requires_input?})
+        if (eventName === "tool") {
+          let argumentsText = "";
+          if (data.arguments) {
+            try { argumentsText = typeof data.arguments === "string" ? data.arguments : JSON.stringify(data.arguments, null, 2); } catch (_) {}
+          }
+          let summary = "";
+          let errorText = "";
+          if (typeof data.result === "string") {
+            summary = data.result.length > 400 ? data.result.slice(0, 400) + "…" : data.result;
+            // 尝试解析 JSON 结果里的错误
+            try {
+              const parsed = JSON.parse(data.result);
+              if (parsed && parsed.success === false && parsed.error) {
+                errorText = String(parsed.error);
+              }
+              if (parsed && parsed.status === "requires_input" && parsed.outputs && parsed.outputs.message) {
+                summary = String(parsed.outputs.message);
+              }
+            } catch (_) {}
+          }
+          turn.updateToolResult({
+            name: data.name,
+            argumentsText: argumentsText,
+            elapsed_ms: data.elapsed_ms,
+            requiresInput: data.requires_input === true,
+            missing_fields: data.missing_fields || [],
+            summary: summary,
+            errorText: errorText,
           });
           return;
         }

@@ -144,6 +144,7 @@ type AssistantRequest struct {
 	ConversationID string               `json:"conversation_id,omitempty"`
 	PageContext    AssistantPageContext `json:"page_context,omitempty"`
 	ExecutionMode  string               `json:"execution_mode,omitempty"` // sandbox | normal
+	AssistantName  *string              `json:"assistant_name,omitempty"`  // 自定义助手名称（嵌入式场景使用）
 }
 
 // ToolDefinition 工具定义
@@ -375,7 +376,7 @@ func waitToolWithHeartbeat(c *gin.Context, requestStart time.Time, activity *ass
 }
 
 // getSystemPrompt 获取系统提示
-func getSystemPrompt(tenantID string, toolNames []string, unavailableCapabilities ...[]string) string {
+func getSystemPrompt(tenantID string, toolNames []string, assistantName *string, unavailableCapabilities ...[]string) string {
 	toolList := "无"
 	if len(toolNames) > 0 {
 		visible := toolNames
@@ -398,9 +399,13 @@ func getSystemPrompt(tenantID string, toolNames []string, unavailableCapabilitie
 			unavailableSection += fmt.Sprintf("\n- 其余 %d 项不可用能力已省略", len(unavailableCapabilities[0])-len(visible))
 		}
 	}
-	return `你是 EASP 企业智能服务平台助手。
-租户: ` + tenantID + `
-可用工具: ` + toolList + `
+	name := "EASP 企业智能服务平台助手"
+	if assistantName != nil && *assistantName != "" {
+		name = *assistantName
+	}
+	return fmt.Sprintf(`你是 %s。
+租户: %s
+可用工具: %s
 规则:
 - 需要操作/查询时优先调用工具，不猜测。
 - 配置变更前说明关键影响；高危操作先确认。
@@ -408,7 +413,7 @@ func getSystemPrompt(tenantID string, toolNames []string, unavailableCapabilitie
 - 工具返回的数据优先于记忆和页面上下文。
 - 创建用户/角色/MCP 等多步骤任务，优先使用可用 Skill；Skill 返回 requires_input 时只追问缺失字段，不继续调用工具。
 - 创建用户只需要 email 和 display_name，role_name 可选；不要询问、收集或输出初始密码，后续通过重置密码或 SSO 完成登录。
-- 无权限或无工具时直接说明。` + unavailableSection
+- 无权限或无工具时直接说明。%s`, name, tenantID, toolList, unavailableSection)
 }
 
 func buildPageContextPrompt(pageContext AssistantPageContext) string {
@@ -2993,7 +2998,7 @@ var tools []ToolDefinition
 		// 动态构建system prompt（注入记忆上下文 + 可用技能信息）
 	unavailableCapabilities := unavailableCapabilityLinesForMissingPermissions(permissions)
 	unavailableCapabilities = append(unavailableCapabilities, skillLoadResultVar.UnavailableCapabilities...)
-		basePrompt := getSystemPrompt(tid, toolNames, unavailableCapabilities) + buildPageContextPrompt(req.PageContext)
+		basePrompt := getSystemPrompt(tid, toolNames, req.AssistantName, unavailableCapabilities) + buildPageContextPrompt(req.PageContext)
 
 		// 注入可用技能信息到system prompt
 		if len(allowedSkills) > 0 || hasWildcard {
@@ -3209,6 +3214,35 @@ var tools []ToolDefinition
 
 					var args map[string]any
 					json.Unmarshal([]byte(tc.Function.Arguments), &args)
+					// 前置预检：MCP 工具在真正执行前先看 required 字段是否齐全，
+					// 缺失就发 event:tool + event:done requires_input=true，不再触发 executeTool，
+					// 由用户在下一轮补充参数（避免默认为"执行完成"的误导流程）。
+					if strings.HasPrefix(tc.Function.Name, "mcp_") {
+						if toolDef := findToolByName(tools, tc.Function.Name); toolDef != nil {
+							if missing, _, resultJSON := checkMCPRequiredParams(tc.Function.Name, args, toolDef.Function.Parameters); len(missing) > 0 && resultJSON != "" {
+								sendSSEActive(c, activity, SSEEventTool, map[string]any{
+									"name":           tc.Function.Name,
+									"arguments":      args,
+									"result":         resultJSON,
+									"missing_fields": missing,
+									"requires_input": true,
+									"elapsed_ms":     int64(0),
+								})
+								if reply, ok := requiresInputReplyFromToolResult(resultJSON, lastUserMsg); ok {
+									sendAssistantBufferedDelta(c, activity, reply)
+									saveConversationMessage(tid, uid, conversationID, "assistant", reply)
+									sendSSEActive(c, activity, SSEEventDone, map[string]any{
+										"total_ms":         time.Since(requestStart).Milliseconds(),
+										"conversation_id":  conversationID,
+										"requires_input":   true,
+										"missing_fields":   missing,
+										"pending_tool":     tc.Function.Name,
+									})
+									return
+								}
+							}
+						}
+					}
 					if deniedResult, denied := toolPermissionDeniedResult(tc.Function.Name, skillLoadResultVar.UnavailableByToolName); denied {
 						sendSSEActive(c, activity, SSEEventTool, map[string]any{
 							"name":       tc.Function.Name,
@@ -3257,9 +3291,10 @@ var tools []ToolDefinition
 					RecordToolCallUsage(tid, userID.(string), resourceType, resourceID, resourceName,
 						"ai_assistant", status, int(toolElapsed), requestID, resultErr)
 
-					// 发送工具结果事件
+					// 发送工具结果事件（带 arguments 供前端展示入参）
 					sendSSEActive(c, activity, SSEEventTool, map[string]any{
 						"name":       tc.Function.Name,
+						"arguments":  args,
 						"result":     result,
 						"elapsed_ms": toolElapsed,
 					})
