@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Form, Input, Button, Typography, Tabs, App, Result } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { authApi, type AuthResponse } from '../api/auth';
 import client from '../api/client';
@@ -30,6 +30,10 @@ type TenantLoginResponse = AuthResponse & {
 
 const Login: React.FC = () => {
   const { tenantId } = useParams<{ tenantId: string }>();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const isRegisterPath = location.pathname === '/register';
+  const isTrial = searchParams.get('trial') === '1';
   const isTenantEntry = Boolean(tenantId);
   const { login, reloadUser } = useAuth();
   const navigate = useNavigate();
@@ -39,7 +43,9 @@ const Login: React.FC = () => {
   const [checkingTenant, setCheckingTenant] = useState(false);
   const [tenantName, setTenantName] = useState('');
   const [tenantError, setTenantError] = useState('');
-  const [activeTab, setActiveTab] = useState('login');
+  const [activeTab, setActiveTab] = useState(
+    isRegisterPath || searchParams.get('tab') === 'register' ? 'register' : 'login'
+  );
   const { message } = App.useApp();
   const isMobile = window.innerWidth < 768;
 
@@ -106,6 +112,7 @@ const Login: React.FC = () => {
       await authApi.register({
         ...values,
         tenant_id: tenantId || values.tenant_id,
+        trial: isTrial,
       });
       message.success('注册成功，请登录');
       setActiveTab('login');
@@ -203,8 +210,13 @@ const Login: React.FC = () => {
                 <Form.Item name="email" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
                   <Input placeholder="邮箱（属性信息，可后续修改）" />
                 </Form.Item>
-                <Form.Item name="phone">
-                  <Input placeholder="手机号（属性信息，可后续修改）" />
+                <Form.Item name="phone" rules={isTrial ? [
+                  { required: true, message: '请输入手机号（便于后续联系）' },
+                  { pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确' },
+                ] : [
+                  { pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确' },
+                ]}>
+                  <Input placeholder={isTrial ? '手机号（必填，用于后续联系）' : '手机号（选填）'} />
                 </Form.Item>
                 <Form.Item name="display_name">
                   <Input placeholder="显示名称（可选）" />

@@ -53,6 +53,7 @@ const AppRoutes = () => {
           <Route path="usage-analytics" element={<UsageAnalytics />} />
         </Route>
         <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/register" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route path="/sso/:tenantId" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route path="/docs/api-key-access" element={<ApiKeyAccessDoc />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

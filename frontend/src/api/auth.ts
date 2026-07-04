@@ -13,6 +13,7 @@ export interface RegisterParams {
   phone?: string;
   password: string;
   display_name?: string;
+  trial?: boolean;
 }
 
 export interface User {

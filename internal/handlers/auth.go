@@ -38,6 +38,7 @@ type RegisterRequest struct {
 	Phone       string `json:"phone"`
 	Password    string `json:"password" binding:"required,min=6"`
 	DisplayName string `json:"display_name"`
+	Trial       bool   `json:"trial"`
 }
 
 // LoginRequest 登录请求
@@ -76,7 +77,35 @@ func (r *RegisterRequest) NormalizeAndValidateIdentity() error {
 	if r.Account == "" {
 		return errors.New("account is required")
 	}
+	// 试用渠道强制手机号
+	if r.Trial {
+		if r.Phone == "" {
+			return errors.New("phone is required for trial registration")
+		}
+		if !isValidChinesePhone(r.Phone) {
+			return errors.New("invalid phone number format")
+		}
+	} else if r.Phone != "" && !isValidChinesePhone(r.Phone) {
+		// 非试用渠道：填了手机号就校验格式
+		return errors.New("invalid phone number format")
+	}
 	return nil
+}
+
+// isValidChinesePhone 校验中国大陆手机号格式（11位，1开头）
+func isValidChinesePhone(phone string) bool {
+	if len(phone) != 11 {
+		return false
+	}
+	if phone[0] != '1' {
+		return false
+	}
+	for _, c := range phone {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r LoginRequest) NormalizedIdentifier() string {
@@ -127,7 +156,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	if err := req.NormalizeAndValidateIdentity(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Account is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -198,6 +227,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// 自动分配默认角色 (role-user)
 	roleRepo := repositories.NewUserRoleRepository()
 	roleRepo.Assign(user.ID, "role-user")
+
+	// 试用渠道：异步通知企业微信
+	if req.Trial {
+		NotifyNewRegistration(tenant.ID, tenant.Name, user.Account, user.Phone, user.Email, user.DisplayName, user.CreatedAt)
+	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Registration successful",
