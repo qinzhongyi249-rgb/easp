@@ -60,6 +60,7 @@ const requiredFeatures = [
   // 契约字段
   { name: 'request body 使用 message（单字符串）', needle: 'message: question' },
   { name: 'session_id 存储键 easp_embed_session_id', needle: 'easp_embed_session_id' },
+  { name: 'storage 版本号迁移（清老 bug 脏数据）', needle: 'easp_embed_sdk_version' },
 ];
 for (const feat of requiredFeatures) {
   results.push(check(feat.name, distSrc.includes(feat.needle)));

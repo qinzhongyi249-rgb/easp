@@ -613,13 +613,21 @@ function initAssistant(options) {
   const sendButton = shadowRoot.querySelector(".easp-send");
 
   // session_id = embed_sessions.id（后端 event:session_id 下发）。
-  // 旧版曾把 conversation_id 存进 easp_embed_conversation_id，那个 ID 不是 session_id，
-  // 用它请求会 404 Session not found，所以本次不再读老 key。用户历史会话会自动开新会话。
-  let sessionId = localStorage.getItem("easp_embed_session_id") || "";
-  // 清理旧 key，避免后续误取
-  if (localStorage.getItem("easp_embed_conversation_id")) {
+  // ⚠️ Storage 版本号：老版本 SDK 有 bug 会把 conversation_id (记忆池 ID) 错误覆写到
+  // easp_embed_session_id key 里，用它请求必然 404。SDK 升级时 bump 版本号，一次性清掉
+  // 老脏数据。已经在新版下正常使用的用户不受影响（只会清一次）。
+  const STORAGE_VERSION = "v2";
+  const savedVersion = localStorage.getItem("easp_embed_sdk_version");
+  if (savedVersion !== STORAGE_VERSION) {
+    localStorage.removeItem("easp_embed_session_id");
     localStorage.removeItem("easp_embed_conversation_id");
+    localStorage.setItem("easp_embed_sdk_version", STORAGE_VERSION);
   }
+
+  // 首次打开 = localStorage 无 session_id → 不带 session_id → 后端自动建新会话
+  // 二次打开 / 同页连续对话 = 有 session_id → 带上复用
+  // session_id 过期 = 后端返 404 → SDK auto-retry 清缓存开新会话
+  let sessionId = localStorage.getItem("easp_embed_session_id") || "";
   let apiToken = "";
   let dragging = false;
   let moved = false;
