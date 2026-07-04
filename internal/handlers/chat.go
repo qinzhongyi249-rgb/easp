@@ -408,6 +408,7 @@ func getSystemPrompt(tenantID string, toolNames []string, assistantName *string,
 可用工具: %s
 规则:
 - 需要操作/查询时优先调用工具，不猜测。
+- 调用工具时必须使用 OpenAI function calling / tool_calls 协议，禁止在正文里输出 <invoke>/<parameter>/<tool_use> 等 XML 标签或 {"tool":"xxx","arguments":{...}} JSON 来模拟工具调用。
 - 配置变更前说明关键影响；高危操作先确认。
 - 输出尽量精简：先结论，少铺垫；查询结果只列关键字段。
 - 工具返回的数据优先于记忆和页面上下文。
@@ -3348,14 +3349,30 @@ var tools []ToolDefinition
 				"total_ms":   time.Since(requestStart).Milliseconds(),
 			})
 
-			// 流式调用模型
 			streamStart := time.Now()
-			assistantContent, err := h.streamFinalResponse(tid, messages, c, activity)
-			if err != nil {
-				log.Printf("Stream error: %v", err)
-				// 降级到非流式
+			var assistantContent string
+			// 若第一轮 callModelWithTools 已经返回了非空 content，直接使用；
+			// 避免再调 streamFinalResponse（无 tools 通道）导致模型 hallucinate 出
+			// <tool_use>/<parameter>/{"tool":...} 之类的假工具调用。
+			// 只在第一轮 content 为空（比如工具调用完成后需要总结）时才回落到 streamFinalResponse。
+			if strings.TrimSpace(response.Content) != "" {
 				assistantContent = response.Content
-				sendAssistantBufferedDelta(c, activity, response.Content)
+				// 用同一份 delta buffer 把内容切成流片段推给客户端
+				buf := newAssistantDeltaBuffer(8, 32, 80*time.Millisecond)
+				for _, chunk := range buf.push(response.Content, time.Now(), true) {
+					if chunk == "" {
+						continue
+					}
+					sendSSEActive(c, activity, SSEEventDelta, map[string]string{"content": chunk})
+				}
+			} else {
+				var err error
+				assistantContent, err = h.streamFinalResponse(tid, messages, c, activity)
+				if err != nil {
+					log.Printf("Stream error: %v", err)
+					assistantContent = response.Content
+					sendAssistantBufferedDelta(c, activity, response.Content)
+				}
 			}
 			saveConversationMessage(tid, uid, conversationID, "assistant", assistantContent)
 
@@ -3593,6 +3610,9 @@ func (h *ChatHandler) callModelWithTools(tenantID string, userID string, message
 	}
 	if len(allTools) > 0 {
 		reqBody["tools"] = allTools
+		// 明确要求模型使用 function calling 通道，防止 ark-code-latest 等模型
+		// 把工具调用当纯文本 XML/JSON 吐出。
+		reqBody["tool_choice"] = "auto"
 	}
 
 	body, _ := json.Marshal(reqBody)
@@ -3700,6 +3720,30 @@ func (h *ChatHandler) callModelWithTools(tenantID string, userID string, message
 			CachedTokens: 0,
 			Provider:     config.ProviderName,
 			Model:        config.Model,
+		}
+		// 兜底：模型如果没有走 OpenAI function calling，而是把 <tool_use><invoke name="...">
+		// / 裸 <parameter name="tool">...</parameter> / {"tool":"...","arguments":{...}}
+		// 当纯文本吐出（常见于火山方舟 coding/v3 的 ark-code-latest / claude-sonnet），
+		// 把它解析成标准 ToolCalls，让后续 tool_calling 流程正常触发。
+		if len(response.ToolCalls) == 0 {
+			preview := response.Content
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			logger.Info("chat", "model returned no tool_calls",
+				logger.Field("content_len", len(response.Content)),
+				logger.Field("content_preview", preview),
+			)
+			if containsHallucinatedToolCall(response.Content) {
+				if xmlCalls, cleaned := parseXMLToolCalls(response.Content); len(xmlCalls) > 0 {
+					logger.Info("chat", "recovered tool calls from hallucinated text",
+						logger.Field("count", len(xmlCalls)),
+						logger.Field("first_tool", xmlCalls[0].Function.Name),
+					)
+					response.ToolCalls = xmlCalls
+					response.Content = cleaned
+				}
+			}
 		}
 		if n, err := chatResp.Usage.PromptTokens.Int64(); err == nil {
 			response.InputTokens = int(n)
