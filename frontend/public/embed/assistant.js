@@ -5,7 +5,7 @@ function getStyles() {
     .easp-fab{position:fixed;width:56px;height:56px;border-radius:50%;border:0;background:linear-gradient(135deg,#4f7cff,#2b5cff);color:#fff;box-shadow:0 10px 24px rgba(43,92,255,.3);font-size:22px;z-index:2147483647;cursor:pointer;user-select:none}
     .easp-fab.dragging{cursor:grabbing}
     .easp-fab img,.easp-fab svg{width:100%;height:100%;border-radius:50%;object-fit:cover}
-    .easp-panel{position:fixed;width:min(380px,calc(100vw - 24px));height:min(720px,calc(100vh - 24px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 16px 48px rgba(15,23,42,.18);z-index:2147483647;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .easp-panel{position:fixed;width:min(380px,calc(100vw - 24px));height:min(720px,calc(100vh - 24px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 16px 48px rgba(15,23,42,.18);z-index:2147483646;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     .easp-panel.open{display:flex}
     .rb{right:20px;bottom:88px}
     .lb{left:20px;bottom:88px}
@@ -662,7 +662,7 @@ function initAssistant(options) {
       let response = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         apiToken = apiToken || await options.tokenProvider();
-        response = await fetch(baseUrl + "/embed/v1/assistant/chat", {
+        response = await fetch(baseUrl + "/api/embed/v1/assistant/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -779,10 +779,46 @@ function initAssistant(options) {
     fab.style.right = "auto";
     fab.style.bottom = "auto";
 
-    panel.style.left = fab.style.left;
-    panel.style.bottom = window.innerHeight - nextTop - fab.offsetHeight + 8 + "px";
+    updatePanelPosition();
+  }
+
+  // 智能面板定位：优先浮球上方，空间不够放下方，最后 clamp 到视口内。
+  // 修复：浮球拖到屏幕上方时，弹框不再飞出屏幕；弹框永远不会覆盖浮球本身（fab z-index 更高）。
+  function updatePanelPosition() {
+    const fabRect = fab.getBoundingClientRect();
+    // 面板尺寸取 CSS 定义的实际约束值
+    const panelWidth = Math.min(380, window.innerWidth - 24);
+    const panelHeight = Math.min(720, window.innerHeight - 24);
+    const gap = 12; // 面板与浮球之间的间距
+    const margin = 8; // 面板离视口边缘的最小距离
+
+    // 优先放在浮球上方（bottom 定位），空间不足则放下方（top 定位）
+    let panelTop;
+    const spaceAbove = fabRect.top - gap - margin;
+    const spaceBelow = window.innerHeight - fabRect.bottom - gap - margin;
+    if (spaceAbove >= panelHeight || spaceAbove >= spaceBelow) {
+      // 放上方
+      panelTop = fabRect.top - gap - panelHeight;
+      if (panelTop < margin) panelTop = margin;
+    } else {
+      // 放下方
+      panelTop = fabRect.bottom + gap;
+      if (panelTop + panelHeight > window.innerHeight - margin) {
+        panelTop = window.innerHeight - margin - panelHeight;
+      }
+    }
+
+    // 水平：默认与浮球左对齐，超出右边则贴右；小于 margin 则贴左
+    let panelLeft = fabRect.left;
+    if (panelLeft + panelWidth > window.innerWidth - margin) {
+      panelLeft = window.innerWidth - margin - panelWidth;
+    }
+    if (panelLeft < margin) panelLeft = margin;
+
+    panel.style.left = panelLeft + "px";
+    panel.style.top = panelTop + "px";
     panel.style.right = "auto";
-    panel.style.top = "auto";
+    panel.style.bottom = "auto";
   }
 
   function handleMouseUp() {
@@ -799,7 +835,19 @@ function initAssistant(options) {
       moved = false;
       return;
     }
+    const willOpen = !panel.classList.contains("open");
+    if (willOpen) {
+      // 用户拖动浮球后，打开面板前重算位置，防止弹框飞出屏幕/覆盖浮球
+      updatePanelPosition();
+    }
     panel.classList.toggle("open");
+  });
+
+  // 视口大小变化时（包括手机键盘弹出、旋屏）重算面板位置
+  window.addEventListener("resize", function() {
+    if (panel.classList.contains("open")) {
+      updatePanelPosition();
+    }
   });
 
   closeButton.addEventListener("click", function() {
