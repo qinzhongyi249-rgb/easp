@@ -612,7 +612,11 @@ function initAssistant(options) {
   const inputEl = shadowRoot.querySelector(".easp-input");
   const sendButton = shadowRoot.querySelector(".easp-send");
 
-  let conversationId = localStorage.getItem("easp_embed_conversation_id") || "";
+  // session_id 是主字段，兼容读取旧的 easp_embed_conversation_id
+  let sessionId =
+    localStorage.getItem("easp_embed_session_id") ||
+    localStorage.getItem("easp_embed_conversation_id") ||
+    "";
   let apiToken = "";
   let dragging = false;
   let moved = false;
@@ -630,7 +634,8 @@ function initAssistant(options) {
   }
 
   function resetConversation() {
-    conversationId = "";
+    sessionId = "";
+    localStorage.removeItem("easp_embed_session_id");
     localStorage.removeItem("easp_embed_conversation_id");
     messagesEl.innerHTML = "";
     addWelcomeMessage();
@@ -647,17 +652,27 @@ function initAssistant(options) {
     sendButton.disabled = true;
 
     try {
+      // 严格对齐后端 EmbedChatRequest（internal/handlers/embed.go:680）：
+      //   session_id / conversation_id / message(required) / assistant_name /
+      //   execution_mode / page_context / context / visitor_id
+      // ⚠️ 不要发老的 messages 数组、user、tenant_id —— 后端会 400。
       const body = {
-        conversation_id: conversationId || undefined,
-        messages: [{ role: "user", content: question }],
+        message: question,
+        execution_mode: options.execution_mode || options.executionMode || "normal",
         page_context: typeof options.pageContextProvider === "function"
           ? options.pageContextProvider()
           : { url: location.href, title: document.title },
-        execution_mode: options.execution_mode || options.executionMode || "normal",
       };
-
-      if (options.user) body.user = options.user;
-      if (options.tenantId) body.tenant_id = options.tenantId;
+      if (sessionId) body.session_id = sessionId;
+      if (options.assistantName || options.title) {
+        body.assistant_name = options.assistantName || options.title;
+      }
+      if (options.visitorId) body.visitor_id = options.visitorId;
+      if (typeof options.contextProvider === "function") {
+        try { body.context = options.contextProvider(); } catch (_) {}
+      } else if (options.context) {
+        body.context = options.context;
+      }
 
       let response = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -686,9 +701,18 @@ function initAssistant(options) {
         const eventName = packet.event;
         const data = packet.data && typeof packet.data === "object" ? packet.data : {};
 
-        if (data.conversation_id) {
-          conversationId = data.conversation_id;
-          localStorage.setItem("easp_embed_conversation_id", conversationId);
+        // 优先取 event:session_id（后端主发的会话字段），兼容 data.session_id / conversation_id 兜底
+        if (eventName === "session_id" && data.session_id) {
+          sessionId = data.session_id;
+          localStorage.setItem("easp_embed_session_id", sessionId);
+          return;
+        }
+        if (data.session_id) {
+          sessionId = data.session_id;
+          localStorage.setItem("easp_embed_session_id", sessionId);
+        } else if (data.conversation_id) {
+          sessionId = data.conversation_id;
+          localStorage.setItem("easp_embed_session_id", sessionId);
         }
 
         if (eventName === "status" || eventName === "step") {

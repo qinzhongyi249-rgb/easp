@@ -57,15 +57,22 @@ const requiredFeatures = [
   { name: 'XSS 防护 escapeHtml', needle: 'escapeHtml' },
   { name: '步骤气泡 step-panel', needle: 'step-panel' },
   { name: 'z-index 分层（面板低于浮球）', needle: 'z-index:2147483646' },
+  // 契约字段
+  { name: 'request body 使用 message（单字符串）', needle: 'message: question' },
+  { name: 'session_id 存储键 easp_embed_session_id', needle: 'easp_embed_session_id' },
 ];
 for (const feat of requiredFeatures) {
   results.push(check(feat.name, distSrc.includes(feat.needle)));
 }
 
-// 3. 反向断言：不允许出现已知的错误路径
+// 3. 反向断言：不允许出现已知的错误路径 / 错误契约字段
 const badPatterns = [
   { name: '不能残留旧路径 /embed/v1/assistant/chat（缺 /api 前缀）',
     reg: /["']\/embed\/v1\/assistant\/chat["']/ },
+  { name: '不能发送 messages 数组（后端要求 message 单字符串）',
+    reg: /messages:\s*\[\s*\{\s*role:\s*["']user["']/ },
+  { name: '不能发送 tenant_id/user 字段（后端 EmbedChatRequest 无此字段）',
+    reg: /body\.(tenant_id|user)\s*=/ },
 ];
 for (const bp of badPatterns) {
   results.push(check(bp.name, !bp.reg.test(distSrc)));
