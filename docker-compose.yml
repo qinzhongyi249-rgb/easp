@@ -1,0 +1,67 @@
+# ============================================
+# EASP - Docker Compose
+# ============================================
+# Quick start:
+#   docker compose up -d
+#
+# Services:
+#   - mcp-server: Python MCP Server (port 9000)
+#   - mcp-test:   Go MCP test tool (one-shot, for CI)
+# ============================================
+
+version: "3.9"
+
+services:
+  # ==========================================
+  # Python MCP Server
+  # ==========================================
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp-server/Dockerfile
+    container_name: easp-mcp-server
+    ports:
+      - "${MCP_PORT:-9000}:9000"
+    environment:
+      - PORT=9000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MCP_CONFIG_PATH=/app/mcp_config.json
+    volumes:
+      # Mount custom config for tool definitions
+      - ./mcp-server/mcp_config.json:/app/mcp_config.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/sse"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - easp-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
+  # Go MCP Test Tool (CI/验证用)
+  # ==========================================
+  mcp-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: easp-mcp-test
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    environment:
+      - MCP_SERVER_URL=http://mcp-server:9000/sse
+    profiles:
+      - test
+    networks:
+      - easp-net
+
+networks:
+  easp-net:
+    driver: bridge

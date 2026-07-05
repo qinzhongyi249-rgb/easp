@@ -39,6 +39,9 @@ easp/
 ├── cmd/
 │   ├── mcp-test/                 # MCP 测试工具
 │   └── mcp-e2e/                  # MCP 端到端测试
+├── Dockerfile                    # Go MCP Tools 容器镜像
+├── docker-compose.yml             # 一键部署编排
+├── .dockerignore
 ├── docs/                         # 文档
 ├── migrations/                   # 数据库 Schema
 ├── LICENSE                       # AGPL v3
@@ -81,6 +84,18 @@ import "github.com/qinzhongyi249-rgb/easp/pkg/mcp"
 client := mcp.NewClient("http://localhost:9000/sse")
 tools, _ := client.ListTools()
 ```
+
+## 🐳 容器化部署
+
+```bash
+# 一键启动 MCP Server
+docker compose up -d mcp-server
+
+# 验证
+curl http://localhost:9000/sse
+```
+
+详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ## 📄 License
 

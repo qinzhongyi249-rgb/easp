@@ -1,0 +1,39 @@
+# Docker
+**/Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Go
+*.exe
+*.test
+*.out
+/bin/
+/easp-server
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Git
+.git/
+.gitignore
