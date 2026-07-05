@@ -14,8 +14,6 @@ venv/
 *.exe
 *.test
 *.out
-/bin/
-/easp-server
 
 # Node
 node_modules/

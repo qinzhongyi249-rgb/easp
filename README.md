@@ -1,11 +1,12 @@
 # EASP - 企业级 API-to-MCP 智能网关 (开源核心)
 
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docs.docker.com/)
 
-**EASP (Enterprise AI Service Platform)** 开源核心 —— 包含 MCP 协议实现、嵌入式 AI 助手 SDK、MCP Server 框架。
+**EASP (Enterprise AI Service Platform)** 开源核心 —— 包含 MCP 协议实现、MCP Server 框架、嵌入式 AI 助手 SDK。
 
 > 🌐 官网：[jindiyun.com](https://www.jindiyun.com) | 商业版：[easp.jindiyun.com](https://easp.jindiyun.com)
 
@@ -15,51 +16,57 @@
 
 ```
 easp/
-├── sdk/js/                       # 嵌入式 AI 助手 JS SDK
-│   ├── assistant.js              # 编译产物（5 行代码接入）
-│   ├── assistant-frame.html      # iframe 模式
-│   └── src/                      # TypeScript 源码
-│       └── assistant-sdk.ts
-├── pkg/mcp/                      # Go MCP 协议实现
-│   ├── protocol.go               # MCP 协议核心
-│   ├── client.go                 # MCP Client
-│   ├── server.go                 # MCP Server
-│   ├── proxy.go                  # MCP 代理
-│   └── curl_import.go            # cURL → MCP 工具导入
-├── pkg/openapi/                  # OpenAPI → MCP 转换
-│   └── parser.go
-├── mcp-server/                   # Python MCP Server 框架
-│   ├── app/
-│   │   ├── mcp_server.py         # MCP Server 实现
-│   │   ├── main.py               # 入口
-│   │   └── config.py             # 配置
-│   ├── requirements.txt
-│   ├── start.sh / restart.sh / stop.sh
-│   └── mcp_config.json           # 示例配置
+├── internal/
+│   ├── mcp/                       # Go MCP 协议实现
+│   │   ├── protocol.go            # MCP 协议核心（JSON-RPC 2.0）
+│   │   ├── client.go              # MCP Client（SSE + Streamable HTTP）
+│   │   ├── server.go              # MCP Server
+│   │   ├── proxy.go               # MCP 代理（透传/治理）
+│   │   ├── curl_import.go         # cURL → MCP 工具导入
+│   │   └── builtin_governance.go  # 内置治理工具
+│   └── openapi/
+│       └── parser.go              # OpenAPI → MCP 转换
 ├── cmd/
-│   ├── mcp-test/                 # MCP 测试工具
-│   └── mcp-e2e/                  # MCP 端到端测试
-├── Dockerfile                    # Go MCP Tools 容器镜像
-├── docker-compose.yml             # 一键部署编排
-├── .dockerignore
-├── docs/                         # 文档
-├── migrations/                   # 数据库 Schema
-├── LICENSE                       # AGPL v3
+│   ├── mcp-test/                  # MCP 测试工具（CLI）
+│   └── mcp-e2e/                   # MCP 端到端测试
+├── mcp-server/                    # Python MCP Server 框架
+│   ├── app/
+│   │   ├── mcp_server.py          # MCP Server 实现
+│   │   ├── main.py                # 入口
+│   │   └── config.py              # 配置
+│   ├── requirements.txt
+│   ├── mcp_config.json            # 示例配置
+│   └── start.sh / restart.sh / stop.sh
+├── frontend/                      # 嵌入式 AI 助手 SDK
+│   ├── public/embed/
+│   │   ├── assistant.js           # 编译产物（5 行代码接入）
+│   │   └── assistant-frame.html   # iframe 模式
+│   └── src/embed/
+│       └── assistant-sdk.ts       # TypeScript 源码
+├── docs/                          # 文档
+├── migrations/                    # 数据库迁移（SSO 示例）
+├── Dockerfile                     # Go MCP Tools 容器镜像
+├── docker-compose.yml             # 一键部署 MCP Server
+├── LICENSE                        # AGPL v3
 └── README.md
 ```
 
+---
+
 ## 🚀 快速开始
 
-### JS SDK（5 行代码嵌入 AI 助手）
+### Go MCP 协议库
 
-```html
-<script src="https://easp.jindiyun.com/embed/assistant.js"></script>
-<script>
-  EASPAssistant.init({
-    appId: "your-app-id",
-    baseUrl: "https://easp.jindiyun.com"
-  });
-</script>
+```bash
+go get github.com/qinzhongyi249-rgb/easp
+```
+
+```go
+import "github.com/qinzhongyi249-rgb/easp/internal/mcp"
+
+// 创建 MCP Client
+client := mcp.NewClient("http://localhost:9000/sse")
+tools, _ := client.ListTools()
 ```
 
 ### Python MCP Server
@@ -71,31 +78,39 @@ bash start.sh
 # MCP SSE 端点: http://localhost:9000/sse
 ```
 
-### Go MCP 协议库
+### 嵌入式 AI 助手 SDK
 
-```bash
-go get github.com/qinzhongyi249-rgb/easp/pkg/mcp
+```html
+<script src="https://easp.jindiyun.com/embed/assistant.js"></script>
+<script>
+  EASPAssistant.init({
+    appId: "your-app-id",
+    baseUrl: "https://easp.jindiyun.com"
+  });
+</script>
 ```
 
-```go
-import "github.com/qinzhongyi249-rgb/easp/pkg/mcp"
+---
 
-// 创建 MCP Client
-client := mcp.NewClient("http://localhost:9000/sse")
-tools, _ := client.ListTools()
-```
-
-## 🐳 容器化部署
+## 🐳 Docker 部署
 
 ```bash
-# 一键启动 MCP Server
+# 启动 MCP Server + 测试工具
 docker compose up -d mcp-server
+
+# 运行 MCP 测试
+docker compose --profile test run --rm mcp-test
 
 # 验证
 curl http://localhost:9000/sse
 ```
 
-详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| `mcp-server` | 9000 | Python MCP Server (SSE) |
+| `mcp-test` | - | Go MCP 测试（一次性） |
+
+---
 
 ## 📄 License
 
