@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "oa_wecom_agent": {
+      "url": "http://localhost:8000/sse",
+      "headers": {
+        "X-API-Token": "your-secret-api-token-here"
+      }
+    }
+  }
+}
